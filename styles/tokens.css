@@ -1,0 +1,78 @@
+/* styles/tokens.css
+   Design system tokens — the single source of truth for all colors,
+   spacing, typography, and radius values.
+   All component styles reference these vars. */
+
+:root {
+  /* ── Colour Palette ──────────────────────────────────────────────────── */
+  --green:    #00e5a0;
+  --red:      #ff3d5a;
+  --amber:    #ffb82e;
+  --blue:     #4da6ff;
+  --purple:   #a78bff;
+  --orange:   #ff6b35;
+
+  --green-bg:  rgba(0,229,160,0.08);
+  --green-dim: rgba(0,229,160,0.14);
+  --red-bg:    rgba(255,61,90,0.08);
+  --red-dim:   rgba(255,61,90,0.14);
+  --amber-bg:  rgba(255,184,46,0.08);
+
+  /* ── Background Layers ───────────────────────────────────────────────── */
+  --bg:   #0b0e17;
+  --bg2:  #111520;
+  --bg3:  #181d2e;
+  --bg4:  #1e243a;
+  --bg5:  #242b42;
+
+  /* ── Borders ─────────────────────────────────────────────────────────── */
+  --border:  rgba(255,255,255,0.06);
+  --border2: rgba(255,255,255,0.10);
+  --border3: rgba(255,255,255,0.16);
+
+  /* ── Text ────────────────────────────────────────────────────────────── */
+  --text:  #e8eaf0;
+  --text2: #9ba3be;
+  --text3: #5a6180;
+
+  /* ── Accent (primary interactive colour) ────────────────────────────── */
+  --accent: var(--green);
+
+  /* ── Typography ──────────────────────────────────────────────────────── */
+  --mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+
+  /* ── Spacing Scale ───────────────────────────────────────────────────── */
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-5:  20px;
+  --sp-6:  24px;
+  --sp-8:  32px;
+
+  /* ── Border Radius ───────────────────────────────────────────────────── */
+  --radius:    10px;
+  --radius-sm: 6px;
+  --radius-xs: 3px;
+  --radius-pill: 20px;
+
+  /* ── Shadows ─────────────────────────────────────────────────────────── */
+  --shadow-card: 0 2px 16px rgba(0,0,0,0.3);
+  --shadow-glow-green: 0 0 12px rgba(0,229,160,0.2);
+}
+
+/* ── Light Theme Overrides ───────────────────────────────────────────────── */
+body.light {
+  --bg:    #f0f2f8;
+  --bg2:   #ffffff;
+  --bg3:   #f5f7fc;
+  --bg4:   #ebedf5;
+  --bg5:   #e2e5ef;
+  --border:  rgba(0,0,0,0.07);
+  --border2: rgba(0,0,0,0.12);
+  --border3: rgba(0,0,0,0.18);
+  --text:  #1a1d2e;
+  --text2: #4a5070;
+  --text3: #8891b0;
+}

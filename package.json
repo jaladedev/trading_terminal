@@ -1,0 +1,21 @@
+{
+  "name": "trading-terminal",
+  "version": "2.0.0",
+  "description": "Professional futures trading assistant — multi-exchange, market regime detection, trade journal, screener",
+  "type": "module",
+  "scripts": {
+    "dev":   "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint":  "eslint . --ext .js,.ts --fix",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "vite":        "^5.2.0",
+    "typescript":  "^5.4.5",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser":        "^7.0.0",
+    "eslint":      "^8.57.0"
+  },
+  "engines": { "node": ">=18" }
+}

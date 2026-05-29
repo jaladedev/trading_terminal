@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TradingTerminal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="./styles/tokens.css" />
+  <link rel="stylesheet" href="./styles/components.css" />
+  <link rel="stylesheet" href="./styles/layout.css" />
+</head>
+<body>
+
+<!-- ── Toast ──────────────────────────────────────────────────────────────── -->
+<div id="toast" class="toast"></div>
+
+<!-- ── Top Bar ────────────────────────────────────────────────────────────── -->
+<header class="topbar">
+  <div class="topbar-left">
+    <span class="topbar-logo">⚡ TT</span>
+    <div id="conn-status" class="conn-status warn">Connecting…</div>
+  </div>
+
+  <div class="topbar-center">
+    <!-- Symbol group -->
+    <div id="sym-group" class="pill-group">
+      <button class="pill-btn sym-active active" onclick="switchSym('BTCUSDT')">BTC</button>
+      <button class="pill-btn" onclick="switchSym('ETHUSDT')">ETH</button>
+      <button class="pill-btn" onclick="switchSym('SOLUSDT')">SOL</button>
+      <button class="pill-btn" onclick="switchSym('BNBUSDT')">BNB</button>
+      <button class="pill-btn" onclick="switchSym('XRPUSDT')">XRP</button>
+    </div>
+
+    <!-- Timeframe group -->
+    <div id="tf-group" class="pill-group">
+      <button class="pill-btn" data-tf="1m"  onclick="switchTF('1m')">1m</button>
+      <button class="pill-btn active" data-tf="5m"  onclick="switchTF('5m')">5m</button>
+      <button class="pill-btn" data-tf="15m" onclick="switchTF('15m')">15m</button>
+      <button class="pill-btn" data-tf="1h"  onclick="switchTF('1h')">1h</button>
+      <button class="pill-btn" data-tf="4h"  onclick="switchTF('4h')">4h</button>
+    </div>
+
+    <!-- Exchange group -->
+    <div id="exch-group" class="pill-group">
+      <button class="pill-btn active sym-active" onclick="switchExchange('bybit',this)">Bybit</button>
+      <button class="pill-btn" onclick="switchExchange('binance',this)">Binance</button>
+      <button class="pill-btn" onclick="switchExchange('okx',this)">OKX</button>
+    </div>
+  </div>
+
+  <div class="topbar-right">
+    <div class="price-display">
+      <span id="live-price" class="live-price">—</span>
+      <span id="live-change" class="live-change">—</span>
+    </div>
+    <button class="btn btn--icon theme-btn" onclick="toggleTheme()">🌙</button>
+  </div>
+</header>
+
+<!-- ── Main Layout ─────────────────────────────────────────────────────────── -->
+<div class="app-layout">
+
+  <!-- ── Left Column ──────────────────────────────────────────────────────── -->
+  <aside class="col-left">
+
+    <!-- Watchlist -->
+    <div id="card-watchlist" class="card card--collapsible">
+      <div class="card-header" onclick="toggleCard('card-watchlist')">
+        <span class="card-title">📋 Watchlist</span>
+        <span class="card-chevron">▾</span>
+      </div>
+      <div class="card-body">
+        <div id="wl-list" class="wl-list"></div>
+        <div class="wl-add-row">
+          <input id="wl-inp" class="input-field" placeholder="BTC / BTCUSDT" style="flex:1" onkeydown="if(event.key==='Enter')wlAdd()" />
+          <button class="btn btn--primary btn--icon" onclick="wlAdd()">+</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Regime Detection -->
+    <div id="card-regime" class="card card--collapsible">
+      <div class="card-header" onclick="toggleCard('card-regime')">
+        <span class="card-title">🧭 Market Regime</span>
+        <span class="card-chevron">▾</span>
+      </div>
+      <div class="card-body">
+        <div id="regime-display" class="regime-badge regime-choppy" style="margin-bottom:8px">—</div>
+        <div id="regime-advice" class="regime-advice"></div>
+        <div class="stat-grid" style="margin-top:8px">
+          <div class="stat-item">
+            <div class="stat-lbl">ADX</div>
+            <div class="stat-val" id="regime-adx">—</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-lbl">Eff. Ratio</div>
+            <div class="stat-val" id="regime-er">—</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Market Structure -->
+    <div id="card-structure" class="card card--collapsible">
+      <div class="card-header" onclick="toggleCard('card-structure')">
+        <span class="card-title">📐 Structure</span>
+        <span class="card-chevron">▾</span>
+      </div>
+      <div class="card-body">
+        <div class="struct-label">Recent Events</div>
+        <div id="structure-events" class="structure-events-list"></div>
+        <div class="struct-label" style="margin-top:8px">VWAP</div>
+        <div class="stat-grid" style="grid-template-columns:1fr 1fr">
+          <div class="stat-item">
+            <div class="stat-lbl">VWAP</div>
+            <div class="stat-val mono" id="leg-vwap">—</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-lbl">AVWAP</div>
+            <div class="stat-val mono" id="avwap-val">—</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button class="btn" style="flex:1;font-size:9px" onclick="anchorToSessionOpen()">⚓ Session Open</button>
+          <button class="btn" style="flex:1;font-size:9px" onclick="clearAnchor()">✕ Clear</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- EMA Readout -->
+    <div id="card-ema" class="card card--collapsible">
+      <div class="card-header" onclick="toggleCard('card-ema')">
+        <span class="card-title">📊 Indicators</span>
+        <span class="card-chevron">▾</span>
+      </div>
+      <div class="card-body">
+        <div class="ema-grid">
+          <div class="ema-item"><span class="ema-label" style="color:#ff6b35">EMA 9</span><span class="ema-val mono" id="leg-e9">—</span></div>
+          <div class="ema-item"><span class="ema-label" style="color:#4da6ff">EMA 20</span><span class="ema-val mono" id="leg-e20">—</span></div>
+          <div class="ema-item"><span class="ema-label" style="color:#a78bff">EMA 50</span><span class="ema-val mono" id="leg-e50">—</span></div>
+          <div class="ema-item"><span class="ema-label" style="color:rgba(240,224,64,0.9)">VWAP</span><span class="ema-val mono" id="leg-vwap2">—</span></div>
+        </div>
+        <div class="ema-item" style="margin-top:6px"><span class="ema-label" style="color:#888">CVD</span><span class="ema-val mono" id="leg-cvd">—</span></div>
+
+        <!-- Delta ticker -->
+        <div class="delta-section" style="margin-top:10px">
+          <div class="struct-label">Order Flow Delta</div>
+          <div class="delta-row">
+            <span class="delta-buy-label">Buy <span id="delta-buy">—</span></span>
+            <span class="delta-sell-label">Sell <span id="delta-sell">—</span></span>
+            <span class="delta-net-label" id="delta-net">—</span>
+          </div>
+          <div class="progress-track" style="margin-top:4px">
+            <div id="delta-ratio-bar" class="progress-bar" style="width:50%"></div>
+          </div>
+        </div>
+
+        <!-- Volume Profile -->
+        <div class="vp-section" style="margin-top:10px">
+          <div class="struct-label">Volume Profile</div>
+          <div class="stat-grid" style="grid-template-columns:repeat(3,1fr)">
+            <div class="stat-item"><div class="stat-lbl">POC</div><div class="stat-val mono" style="font-size:12px" id="vp-poc-val">—</div></div>
+            <div class="stat-item"><div class="stat-lbl">VAH</div><div class="stat-val mono" style="font-size:12px" id="vp-vah-val">—</div></div>
+            <div class="stat-item"><div class="stat-lbl">VAL</div><div class="stat-val mono" style="font-size:12px" id="vp-val-val">—</div></div>
+          </div>
+        </div>
+
+        <!-- Overlay toggles -->
+        <div style="display:flex;gap:5px;margin-top:10px;flex-wrap:wrap">
+          <button class="btn btn--icon active" id="overlay-fib-btn" onclick="toggleOverlay('fib',this)">Fib</button>
+          <button class="btn btn--icon active" id="overlay-vp-btn" onclick="toggleOverlay('vp',this)">VP</button>
+          <button class="btn btn--icon" id="overlay-div-btn" onclick="toggleOverlay('div',this)">Div</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Alerts -->
+    <div id="card-alerts" class="card card--collapsible">
+      <div class="card-header" onclick="toggleCard('card-alerts')">
+        <span class="card-title">🔔 Alerts</span>
+        <span class="card-chevron">▾</span>
+      </div>
+      <div class="card-body">
+        <div class="alert-input-row">
+          <input id="alrt-price" class="input-field" type="number" placeholder="Price" style="flex:1" onkeydown="if(event.key==='Enter')addAlert()" />
+          <button class="btn" id="alrt-dir-btn" onclick="toggleAlertDir()">Above ▲</button>
+          <button class="btn btn--primary btn--icon" onclick="addAlert()">+</button>
+        </div>
+        <div id="alert-list" class="alert-list"></div>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- ── Centre Column ─────────────────────────────────────────────────────── -->
+  <main class="col-center">
+
+    <!-- Price Chart -->
+    <div id="card-chart" class="card chart-card">
+      <div class="card-header" onclick="toggleCard('card-chart')">
+        <span class="card-title">📈 Chart</span>
+        <div class="chart-header-right">
+          <button class="btn btn--icon" onclick="setDirection('long')" title="L key">▲ Long</button>
+          <button class="btn btn--icon" onclick="setDirection('short')" title="S key">▼ Short</button>
+          <label class="mono" style="font-size:10px;color:var(--text2)">RR:
+            <input id="inp-rr" type="number" value="2" min="1" max="10" step="0.5"
+              style="width:44px;background:var(--bg3);border:1px solid var(--border2);color:var(--text);border-radius:4px;padding:2px 5px;font-family:var(--mono);font-size:10px"
+              onchange="setRRRatio(this.value)" />
+          </label>
+          <span class="card-chevron">▾</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <canvas id="c-price" style="width:100%;height:320px;cursor:crosshair;display:block"></canvas>
+        <canvas id="c-rsi"   style="width:100%;height:70px;display:block;margin-top:2px"></canvas>
+        <canvas id="c-vol"   style="width:100%;height:44px;display:block;margin-top:2px"></canvas>
+        <canvas id="c-cvd"   style="width:100%;height:60px;display:block;margin-top:2px"></canvas>
+      </div>
+    </div>
+
+    <!-- Suggestion / Entry -->
+    <div id="card-sug" class="card card--collapsible">
+      <div class="card-header" onclick="toggleCard('card-sug')">
+        <span class="card-title">🎯 Trade Setup</span>
+        <span class="card-chevron">▾</span>
+      </div>
+      <div class="card-body">
+        <div class="sug-header">
+          <span id="sug-dir" class="sug-dir">▲ LONG</span>
+          <span class="sug-quality-badge">
+            <span id="entry-quality-label" class="entry-quality-label">—</span>
+            <span id="entry-quality-score" class="entry-quality-score">—</span>
+          </span>
+        </div>
+        <p id="sug-reason" class="sug-reason"></p>
+        <div id="entry-quality-factors" class="entry-quality-factors"></div>
+
+        <!-- Entry/Stop/Target -->
+        <div class="sug-levels">
+          <div class="sug-level sug-entry">
+            <span class="sug-level-lbl">Entry</span>
+            <span class="sug-level-val mono" id="sug-entry">—</span>
+          </div>
+          <div class="sug-level sug-stop">
+            <span class="sug-level-lbl">Stop</span>
+            <span class="sug-level-val mono" id="sug-stop">—</span>
+          </div>
+          <div class="sug-level sug-target">
+            <span class="sug-level-lbl">Target</span>
+            <span class="sug-level-val mono" id="sug-target">—</span>
+          </div>
+        </div>
+
+        <!-- Partial TPs -->
+        <div class="tp-row">
+          <div class="tp-item"><span class="tp-lbl">TP1 1:1</span><span class="mono" id="tp1-price">—</span><span class="tp-pct" id="tp1-pct"></span></div>
+          <div class="tp-item"><span class="tp-lbl">TP2 1:2</span><span class="mono" id="tp2-price">—</span><span class="tp-pct" id="tp2-pct"></span></div>
+          <div class="tp-item"><span class="tp-lbl">TP3 1:3</span><span class="mono" id="tp3-price">—</span><span class="tp-pct" id="tp3-pct"></span></div>
+        </div>
+
+        <!-- ATR trailing stop -->
+        <div class="atr-trail-row">
+          <span class="stat-lbl">ATR Trail Stop (2×)</span>
+          <span class="mono" id="atr-trail-val">—</span>
+        </div>
+
+        <!-- ATR Position Sizing -->
+        <div class="atr-size-section">
+          <div class="struct-label">ATR-Based Position Size (1% risk)</div>
+          <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-top:6px">
+            <div class="stat-item"><div class="stat-lbl">Tokens</div><div class="stat-val" style="font-size:12px" id="atr-size-tokens">—</div></div>
+            <div class="stat-item"><div class="stat-lbl">Value</div><div class="stat-val" style="font-size:12px" id="atr-size-value">—</div></div>
+            <div class="stat-item"><div class="stat-lbl">Risk $</div><div class="stat-val" style="font-size:12px" id="atr-size-risk">—</div></div>
+            <div class="stat-item"><div class="stat-lbl">Stop Dist</div><div class="stat-val" style="font-size:12px" id="atr-stop-dist">—</div></div>
+          </div>
+        </div>
+
+        <!-- Journal button -->
+        <div style="margin-top:10px">
+          <button class="btn btn--primary" style="width:100%" onclick="openJournalEntry({sym:document.querySelector('#sym-group .sym-active')?.textContent?.trim()+'USDT',dir:document.querySelector('#sug-dir')?.textContent?.includes('LONG')?'long':'short',tf:document.querySelector('#tf-group .active')?.dataset?.tf||'5m',entry:+document.getElementById('sug-entry')?.textContent||0,stop:+document.getElementById('sug-stop')?.textContent||0,target:+document.getElementById('sug-target')?.textContent||0})">
+            📓 Log to Journal
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Entry Zones -->
+    <div id="card-zones" class="card card--collapsible collapsed">
+      <div class="card-header" onclick="toggleCard('card-zones')">
+        <span class="card-title">🎯 Entry Zones</span>
+        <span class="card-chevron">▾</span>
+      </div>
+      <div class="card-body">
+        <div class="zones-grid">
+          <div class="zone-item zone-aggressive">
+            <div class="zone-label">Aggressive</div>
+            <div class="zone-desc">Enter immediately at market · EMA9 area</div>
+            <div class="zone-price mono" id="zone-agg">—</div>
+          </div>
+          <div class="zone-item zone-balanced">
+            <div class="zone-label">Balanced</div>
+            <div class="zone-desc">Wait for EMA9/20 midpoint retest</div>
+            <div class="zone-price mono" id="zone-bal">—</div>
+          </div>
+          <div class="zone-item zone-conservative">
+            <div class="zone-label">Conservative</div>
+            <div class="zone-desc">Wait for EMA20 retest + confirmation</div>
+            <div class="zone-price mono" id="zone-con">—</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <!-- ── Right Column ──────────────────────────────────────────────────────── -->
+  <aside class="col-right">
+
+    <!-- Futures Calculator -->
+    <div id="card-futures" class="card card--collapsible card--accent-top">
+      <div class="card-header" onclick="toggleCard('card-futures')">
+        <span class="card-title">⚡ Futures Calc</span>
+        <span class="card-chevron">▾</span>
+      </div>
+      <div class="card-body">
+        <!-- Inputs -->
+        <div class="fut-inputs">
+          <div class="fut-input-row">
+            <label class="fut-lbl">Capital</label>
+            <div class="fut-input-group">
+              <span class="fut-prefix">$</span>
+              <input id="inp-capital" class="input-field" type="number" value="100" min="1" placeholder="100" />
+            </div>
+          </div>
+          <div class="fut-input-row">
+            <label class="fut-lbl">Margin</label>
+            <div class="fut-input-group">
+              <span class="fut-prefix">$</span>
+              <input id="inp-margin" class="input-field" type="number" value="20" min="1" placeholder="20" />
+            </div>
+          </div>
+          <div class="fut-input-row">
+            <label class="fut-lbl">Entry</label>
+            <input id="inp-entry" class="input-field" type="number" placeholder="Auto" />
+          </div>
+          <div class="fut-input-row">
+            <label class="fut-lbl">Stop</label>
+            <input id="inp-stop" class="input-field" type="number" placeholder="Auto" />
+          </div>
+        </div>
+
+        <!-- Leverage Slider -->
+        <div class="lev-section">
+          <div class="lev-header">
+            <span class="stat-lbl">Leverage</span>
+            <div class="lev-value-group">
+              <input id="lev-manual" class="lev-manual-input" type="number" value="10" min="1" max="100" step="1"
+                onchange="document.getElementById('lev-slider').value=this.value;document.getElementById('lev-display').textContent=this.value+'×';state.leverage=+this.value;computeAndRender?computeAndRender():null;" />
+              <span id="lev-display" class="lev-display">10×</span>
+            </div>
+          </div>
+          <input id="lev-slider" type="range" min="1" max="100" value="10"
+            oninput="this.style.setProperty('--lev-pct',(this.value-1)/99*100+'%');document.getElementById('lev-display').textContent=this.value+'×';document.getElementById('lev-manual').value=this.value;state.leverage=+this.value;computeAndRender?computeAndRender():null;" />
+          <div class="lev-ticks">
+            <span>1×</span><span>10×</span><span>25×</span><span>50×</span><span>100×</span>
+          </div>
+        </div>
+
+        <!-- Fee type -->
+        <div class="fee-type-row">
+          <span class="stat-lbl">Fee Type</span>
+          <div class="pill-group" style="width:auto">
+            <button class="pill-btn active" onclick="state.feeType='maker';computeAndRender()">Maker 0.02%</button>
+            <button class="pill-btn" onclick="state.feeType='taker';computeAndRender()">Taker 0.05%</button>
+          </div>
+        </div>
+
+        <!-- Liquidation gauge -->
+        <div class="liq-section">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+            <span class="stat-lbl">Liquidation Price</span>
+            <span class="mono" id="fv-liq-price">—</span>
+          </div>
+          <div class="progress-track">
+            <div id="liq-bar" class="progress-bar" style="width:0%"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:3px">
+            <span class="stat-lbl">Dist to Liq</span>
+            <span class="mono" id="fv-liq-dist">—</span>
+          </div>
+        </div>
+
+        <!-- Risk warning -->
+        <div id="risk-warn" class="risk-warn" style="display:none"></div>
+
+        <!-- Metrics grid -->
+        <div class="stat-grid">
+          <div class="stat-item">
+            <div class="stat-lbl">Position</div>
+            <div class="stat-val mono" id="fv-pos-size">—</div>
+          </div>
+          <div class="stat-item good">
+            <div class="stat-lbl">Profit (net)</div>
+            <div class="stat-val mono" style="color:var(--green)" id="fv-profit">—</div>
+          </div>
+          <div class="stat-item danger">
+            <div class="stat-lbl">Loss (net)</div>
+            <div class="stat-val mono" style="color:var(--red)" id="fv-loss">—</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-lbl">ROI Win</div>
+            <div class="stat-val mono" id="fv-roi-win">—</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-lbl">ROI Loss</div>
+            <div class="stat-val mono" id="fv-roi-loss">—</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-lbl">Break-even</div>
+            <div class="stat-val mono" id="fv-be-price">—</div>
+          </div>
+        </div>
+
+        <!-- Fees -->
+        <div class="fee-breakdown">
+          <div class="fee-row"><span class="stat-lbl">Open fee</span><span class="mono" id="fee-open">—</span></div>
+          <div class="fee-row"><span class="stat-lbl">Close fee</span><span class="mono" id="fee-close">—</span></div>
+          <div class="fee-row"><span class="stat-lbl">Total fees</span><span class="mono" id="fee-tot">—</span></div>
+        </div>
+
+        <!-- Log trade buttons -->
+        <div class="pnl-log-btns">
+          <button class="btn btn--primary" style="flex:1" onclick="logTrade('win')">✓ Win</button>
+          <button class="btn btn--danger"  style="flex:1" onclick="logTrade('loss')">✗ Loss</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Session P&L Tracker -->
+    <div id="card-pnl" class="card card--collapsible">
+      <div class="card-header" onclick="toggleCard('card-pnl')">
+        <span class="card-title">💹 Session P&L</span>
+        <span class="card-chevron">▾</span>
+      </div>
+      <div class="card-body">
+        <div class="pnl-summary">
+          <div class="stat-item">
+            <div class="stat-lbl">Net P&L</div>
+            <div class="stat-val" id="pnl-net">$0.00</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-lbl">Wins</div>
+            <div class="stat-val" style="color:var(--green)" id="pnl-wins">0</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-lbl">Losses</div>
+            <div class="stat-val" style="color:var(--red)" id="pnl-losses">0</div>
+          </div>
+          <div class="stat-item">
+            <div class="stat-lbl">Win Rate</div>
+            <div class="stat-val" id="pnl-wr">—</div>
+          </div>
+        </div>
+        <div class="pnl-table-wrap">
+          <table class="pnl-table">
+            <thead>
+              <tr><th>#</th><th>Time</th><th>Sym</th><th>Dir</th><th>Result</th><th>P&L</th></tr>
+            </thead>
+            <tbody id="pnl-tbody">
+              <tr><td colspan="6" class="pnl-empty">No trades logged</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button class="btn" style="flex:1;font-size:9px" onclick="clearPnL()">Clear</button>
+          <button class="btn" style="flex:1;font-size:9px" onclick="exportPnL()">⬇ Export</button>
+        </div>
+      </div>
+    </div>
+
+  </aside>
+</div>
+
+<!-- ── Full-Width Bottom Row ───────────────────────────────────────────────── -->
+<div class="bottom-row">
+
+  <!-- Trade Journal -->
+  <div id="card-journal" class="card card--collapsible collapsed">
+    <div class="card-header" onclick="toggleCard('card-journal')">
+      <span class="card-title">📓 Trade Journal</span>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button class="btn btn--icon" style="font-size:9px" onclick="event.stopPropagation();exportJournal()">⬇ Export</button>
+        <button class="btn btn--primary btn--icon" onclick="event.stopPropagation();openJournalEntry({})">+ Log</button>
+        <span class="card-chevron">▾</span>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="journal-layout">
+        <!-- Form (shown when logging/editing) -->
+        <div id="jrn-form" class="jrn-form-panel">
+          <div class="jrn-form-title">New Trade Entry</div>
+          <div class="jrn-form-grid">
+            <div class="jrn-form-row">
+              <label class="fut-lbl">Symbol</label>
+              <input id="jrn-sym" class="input-field" placeholder="BTCUSDT" />
+            </div>
+            <div class="jrn-form-row">
+              <label class="fut-lbl">Direction</label>
+              <select id="jrn-dir" class="input-field">
+                <option value="long">▲ Long</option>
+                <option value="short">▼ Short</option>
+              </select>
+            </div>
+            <div class="jrn-form-row">
+              <label class="fut-lbl">Timeframe</label>
+              <select id="jrn-tf" class="input-field">
+                <option value="1m">1m</option>
+                <option value="5m" selected>5m</option>
+                <option value="15m">15m</option>
+                <option value="1h">1h</option>
+                <option value="4h">4h</option>
+              </select>
+            </div>
+            <div class="jrn-form-row">
+              <label class="fut-lbl">Entry</label>
+              <input id="jrn-entry" class="input-field" type="number" placeholder="0.00" />
+            </div>
+            <div class="jrn-form-row">
+              <label class="fut-lbl">Stop Loss</label>
+              <input id="jrn-stop" class="input-field" type="number" placeholder="0.00" />
+            </div>
+            <div class="jrn-form-row">
+              <label class="fut-lbl">Target</label>
+              <input id="jrn-target" class="input-field" type="number" placeholder="0.00" />
+            </div>
+            <div class="jrn-form-row">
+              <label class="fut-lbl">Exit Price</label>
+              <input id="jrn-exit" class="input-field" type="number" placeholder="Optional" />
+            </div>
+            <div class="jrn-form-row">
+              <label class="fut-lbl">Setup Type</label>
+              <select id="jrn-setup" class="input-field">
+                <option value="ema_pullback">EMA Pullback</option>
+                <option value="breakout">Breakout</option>
+                <option value="reversal">Reversal</option>
+                <option value="mean_revert">Mean Revert</option>
+                <option value="momentum">Momentum</option>
+                <option value="other">Other</option>
+              </select>
+            </div>
+            <div class="jrn-form-row">
+              <label class="fut-lbl">Emotion</label>
+              <select id="jrn-emotion" class="input-field">
+                <option value="confident">😎 Confident</option>
+                <option value="neutral" selected>😐 Neutral</option>
+                <option value="fomo">😰 FOMO</option>
+                <option value="fearful">😨 Fearful</option>
+                <option value="revenge">😡 Revenge</option>
+                <option value="bored">😴 Bored</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Mistake tags -->
+          <div class="jrn-section-label">Mistakes (select all that apply)</div>
+          <div class="jrn-mistakes-group">
+            <button class="jrn-mistake-btn" data-id="early_entry">⚡ Early Entry</button>
+            <button class="jrn-mistake-btn" data-id="late_entry">🐢 Late Entry</button>
+            <button class="jrn-mistake-btn" data-id="wide_stop">📏 Wide Stop</button>
+            <button class="jrn-mistake-btn" data-id="no_stop">🚫 No Stop</button>
+            <button class="jrn-mistake-btn" data-id="oversize">📈 Oversize</button>
+            <button class="jrn-mistake-btn" data-id="revenge">😡 Revenge</button>
+            <button class="jrn-mistake-btn" data-id="fomo">😰 FOMO</button>
+            <button class="jrn-mistake-btn active" data-id="none">✅ None</button>
+          </div>
+
+          <!-- Notes -->
+          <div class="jrn-section-label">Notes</div>
+          <textarea id="jrn-notes" class="input-field" rows="3" placeholder="Setup reasoning, what went wrong, lessons learned…" style="resize:vertical"></textarea>
+
+          <!-- Hidden meta from suggestion engine -->
+          <input type="hidden" id="jrn-regime" />
+          <input type="hidden" id="jrn-score" />
+
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <button class="btn btn--primary" style="flex:1" onclick="saveJournalEntry()">💾 Save</button>
+            <button class="btn" onclick="document.getElementById('jrn-form').classList.remove('show')">Cancel</button>
+          </div>
+        </div>
+
+        <!-- Journal list + stats -->
+        <div class="jrn-main">
+          <!-- Filter row -->
+          <div class="jrn-filter-row">
+            <div class="pill-group">
+              <button class="pill-btn active" onclick="renderJournalList('all');this.closest('.pill-group').querySelectorAll('.pill-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active')">All</button>
+              <button class="pill-btn" onclick="renderJournalList('win');this.closest('.pill-group').querySelectorAll('.pill-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active')">Wins</button>
+              <button class="pill-btn" onclick="renderJournalList('loss');this.closest('.pill-group').querySelectorAll('.pill-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active')">Losses</button>
+            </div>
+          </div>
+
+          <!-- Stats panel -->
+          <div id="jrn-stats" class="jrn-stats-section"></div>
+
+          <!-- List -->
+          <div id="jrn-list" class="jrn-list-panel"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Screener -->
+  <div id="card-screener" class="card card--collapsible collapsed">
+    <div class="card-header" onclick="toggleCard('card-screener')">
+      <span class="card-title">🔍 Screener</span>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button id="scr-run-btn" class="btn btn--primary btn--icon" onclick="event.stopPropagation();runScreener()">▶ Run</button>
+        <button class="btn btn--icon" onclick="event.stopPropagation();toggleScrAuto()" id="scr-auto-btn">Auto</button>
+        <span class="card-chevron">▾</span>
+      </div>
+    </div>
+    <div class="card-body">
+      <!-- TF toggles -->
+      <div class="scr-controls">
+        <div class="scr-tfs">
+          <span class="stat-lbl" style="margin-right:6px">TFs:</span>
+          <button class="pill-btn active" onclick="setScrTF('5m',this)">5m</button>
+          <button class="pill-btn active" onclick="setScrTF('15m',this)">15m</button>
+          <button class="pill-btn active" onclick="setScrTF('1h',this)">1h</button>
+          <button class="pill-btn active" onclick="setScrTF('4h',this)">4h</button>
+        </div>
+        <!-- Filter pills -->
+        <div class="pill-group">
+          <button class="pill-btn active" onclick="setScrFilter('all')">All</button>
+          <button class="pill-btn" onclick="setScrFilter('bull')">Bull</button>
+          <button class="pill-btn" onclick="setScrFilter('bear')">Bear</button>
+          <button class="pill-btn" onclick="setScrFilter('hot')">Hot 🔥</button>
+          <button class="pill-btn" onclick="setScrFilter('breakout')">Breakout</button>
+        </div>
+      </div>
+
+      <!-- Progress bar -->
+      <div id="scr-progress" class="scr-progress" style="display:none">
+        <div class="progress-track" style="margin-bottom:4px">
+          <div id="scr-progress-bar" class="progress-bar" style="width:0%"></div>
+        </div>
+        <span id="scr-progress-lbl" class="stat-lbl">0/0</span>
+      </div>
+
+      <!-- Screener table -->
+      <div class="scr-table-wrap">
+        <table class="scr-table">
+          <thead>
+            <tr>
+              <th onclick="state.scrSortKey='sym';renderScreenerTable()">Symbol</th>
+              <th onclick="state.scrSortKey='price';renderScreenerTable()">Price</th>
+              <th onclick="state.scrSortKey='chgPct';renderScreenerTable()">Chg%</th>
+              <th onclick="state.scrSortKey='signal';renderScreenerTable()">Signal</th>
+              <th onclick="state.scrSortKey='rsi';renderScreenerTable()">RSI</th>
+              <th onclick="state.scrSortKey='score';state.scrSortAsc=false;renderScreenerTable()">Score ↓</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody id="scr-tbody">
+            <tr><td colspan="7" class="scr-empty">Click Run to scan coins</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Replay Engine -->
+  <div id="card-replay" class="card card--collapsible collapsed">
+    <div class="card-header" onclick="toggleCard('card-replay')">
+      <span class="card-title">⏪ Replay</span>
+      <span class="card-chevron">▾</span>
+    </div>
+    <div class="card-body">
+      <div class="replay-controls">
+        <button id="replay-load-btn" class="btn" onclick="replayLoad()">⬇ Load</button>
+        <button id="replay-play-btn" class="btn" onclick="replayToggle()" disabled>▶ Play</button>
+        <button class="btn btn--icon" onclick="replayStep()">⏭</button>
+        <button class="btn btn--danger btn--icon" onclick="replayReset()">↺</button>
+        <label class="fut-lbl">Speed:
+          <input id="replay-speed" type="range" min="1" max="10" value="2"
+            style="width:80px;vertical-align:middle" />
+        </label>
+        <span id="replay-progress-lbl" class="stat-lbl mono">0 / 0</span>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<!-- ── Keyboard shortcuts legend ────────────────────────────────────────────── -->
+<div class="kbd-legend">
+  <span>L: Long</span> · <span>S: Short</span> · <span>R: Run screener</span> ·
+  <span>F: Fib</span> · <span>V: VP</span> · <span>T: Theme</span> ·
+  <span>A: Anchor VWAP</span> · <span>X: Clear anchor</span> ·
+  <span>[ / ]: RR ratio</span>
+</div>
+
+<script type="module" src="./main.js"></script>
+
+<!-- Inline mistake button toggle (no module needed) -->
+<script>
+document.addEventListener('click', e => {
+  const btn = e.target.closest('.jrn-mistake-btn');
+  if (!btn) return;
+  if (btn.dataset.id === 'none') {
+    document.querySelectorAll('.jrn-mistake-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  } else {
+    document.querySelector('.jrn-mistake-btn[data-id="none"]')?.classList.remove('active');
+    btn.classList.toggle('active');
+  }
+});
+</script>
+
+</body>
+</html>
