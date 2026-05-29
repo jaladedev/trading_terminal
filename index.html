@@ -9,6 +9,9 @@
   <link rel="stylesheet" href="./styles/tokens.css" />
   <link rel="stylesheet" href="./styles/components.css" />
   <link rel="stylesheet" href="./styles/layout.css" />
+
+  <!-- Lightweight Charts (Phase 7) -->
+  <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
 </head>
 <body>
 
@@ -169,7 +172,7 @@
         <!-- Overlay toggles -->
         <div style="display:flex;gap:5px;margin-top:10px;flex-wrap:wrap">
           <button class="btn btn--icon active" id="overlay-fib-btn" onclick="toggleOverlay('fib',this)">Fib</button>
-          <button class="btn btn--icon active" id="overlay-vp-btn" onclick="toggleOverlay('vp',this)">VP</button>
+          <button class="btn btn--icon active" id="overlay-vp-btn"  onclick="toggleOverlay('vp',this)">VP</button>
           <button class="btn btn--icon" id="overlay-div-btn" onclick="toggleOverlay('div',this)">Div</button>
         </div>
       </div>
@@ -196,7 +199,7 @@
   <!-- ── Centre Column ─────────────────────────────────────────────────────── -->
   <main class="col-center">
 
-    <!-- Price Chart -->
+    <!-- Price Chart — LWC container replaces 4 canvases -->
     <div id="card-chart" class="card chart-card">
       <div class="card-header" onclick="toggleCard('card-chart')">
         <span class="card-title">📈 Chart</span>
@@ -211,11 +214,13 @@
           <span class="card-chevron">▾</span>
         </div>
       </div>
-      <div class="card-body">
-        <canvas id="c-price" style="width:100%;height:320px;cursor:crosshair;display:block"></canvas>
-        <canvas id="c-rsi"   style="width:100%;height:70px;display:block;margin-top:2px"></canvas>
-        <canvas id="c-vol"   style="width:100%;height:44px;display:block;margin-top:2px"></canvas>
-        <canvas id="c-cvd"   style="width:100%;height:60px;display:block;margin-top:2px"></canvas>
+      <div class="card-body" style="padding:0">
+        <!--
+          Phase 7: Single LWC container replaces the four canvas elements.
+          The LWCChart class builds its own pane divs inside here.
+          Min-height matches sum of original canvas heights (320+70+44+60 + gaps).
+        -->
+        <div id="lwc-container" style="width:100%;min-height:500px;position:relative"></div>
       </div>
     </div>
 
@@ -278,7 +283,15 @@
 
         <!-- Journal button -->
         <div style="margin-top:10px">
-          <button class="btn btn--primary" style="width:100%" onclick="openJournalEntry({sym:document.querySelector('#sym-group .sym-active')?.textContent?.trim()+'USDT',dir:document.querySelector('#sug-dir')?.textContent?.includes('LONG')?'long':'short',tf:document.querySelector('#tf-group .active')?.dataset?.tf||'5m',entry:+document.getElementById('sug-entry')?.textContent||0,stop:+document.getElementById('sug-stop')?.textContent||0,target:+document.getElementById('sug-target')?.textContent||0})">
+          <button class="btn btn--primary" style="width:100%"
+            onclick="openJournalEntry({
+              sym: document.querySelector('#sym-group .sym-active')?.textContent?.trim()+'USDT',
+              dir: document.querySelector('#sug-dir')?.textContent?.includes('LONG')?'long':'short',
+              tf:  document.querySelector('#tf-group .active')?.dataset?.tf||'5m',
+              entry:  +document.getElementById('sug-entry')?.textContent||0,
+              stop:   +document.getElementById('sug-stop')?.textContent||0,
+              target: +document.getElementById('sug-target')?.textContent||0
+            })">
             📓 Log to Journal
           </button>
         </div>
@@ -577,9 +590,11 @@
 
           <!-- Notes -->
           <div class="jrn-section-label">Notes</div>
-          <textarea id="jrn-notes" class="input-field" rows="3" placeholder="Setup reasoning, what went wrong, lessons learned…" style="resize:vertical"></textarea>
+          <textarea id="jrn-notes" class="input-field" rows="3"
+            placeholder="Setup reasoning, what went wrong, lessons learned…"
+            style="resize:vertical"></textarea>
 
-          <!-- Hidden meta from suggestion engine -->
+          <!-- Hidden meta -->
           <input type="hidden" id="jrn-regime" />
           <input type="hidden" id="jrn-score" />
 
@@ -591,19 +606,17 @@
 
         <!-- Journal list + stats -->
         <div class="jrn-main">
-          <!-- Filter row -->
           <div class="jrn-filter-row">
             <div class="pill-group">
-              <button class="pill-btn active" onclick="renderJournalList('all');this.closest('.pill-group').querySelectorAll('.pill-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active')">All</button>
-              <button class="pill-btn" onclick="renderJournalList('win');this.closest('.pill-group').querySelectorAll('.pill-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active')">Wins</button>
-              <button class="pill-btn" onclick="renderJournalList('loss');this.closest('.pill-group').querySelectorAll('.pill-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active')">Losses</button>
+              <button class="pill-btn active"
+                onclick="renderJournalList('all');this.closest('.pill-group').querySelectorAll('.pill-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active')">All</button>
+              <button class="pill-btn"
+                onclick="renderJournalList('win');this.closest('.pill-group').querySelectorAll('.pill-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active')">Wins</button>
+              <button class="pill-btn"
+                onclick="renderJournalList('loss');this.closest('.pill-group').querySelectorAll('.pill-btn').forEach(b=>b.classList.remove('active'));this.classList.add('active')">Losses</button>
             </div>
           </div>
-
-          <!-- Stats panel -->
           <div id="jrn-stats" class="jrn-stats-section"></div>
-
-          <!-- List -->
           <div id="jrn-list" class="jrn-list-panel"></div>
         </div>
       </div>
@@ -621,7 +634,6 @@
       </div>
     </div>
     <div class="card-body">
-      <!-- TF toggles -->
       <div class="scr-controls">
         <div class="scr-tfs">
           <span class="stat-lbl" style="margin-right:6px">TFs:</span>
@@ -630,7 +642,6 @@
           <button class="pill-btn active" onclick="setScrTF('1h',this)">1h</button>
           <button class="pill-btn active" onclick="setScrTF('4h',this)">4h</button>
         </div>
-        <!-- Filter pills -->
         <div class="pill-group">
           <button class="pill-btn active" onclick="setScrFilter('all')">All</button>
           <button class="pill-btn" onclick="setScrFilter('bull')">Bull</button>
@@ -639,16 +650,12 @@
           <button class="pill-btn" onclick="setScrFilter('breakout')">Breakout</button>
         </div>
       </div>
-
-      <!-- Progress bar -->
       <div id="scr-progress" class="scr-progress" style="display:none">
         <div class="progress-track" style="margin-bottom:4px">
           <div id="scr-progress-bar" class="progress-bar" style="width:0%"></div>
         </div>
         <span id="scr-progress-lbl" class="stat-lbl">0/0</span>
       </div>
-
-      <!-- Screener table -->
       <div class="scr-table-wrap">
         <table class="scr-table">
           <thead>
@@ -691,19 +698,24 @@
     </div>
   </div>
 
+  <!--
+    Phase 9: Backtester card slot.
+    Populated at runtime by backtesterHTML() called from init() in main.js.
+  -->
+  <div id="bt-placeholder"></div>
+
 </div>
 
 <!-- ── Keyboard shortcuts legend ────────────────────────────────────────────── -->
 <div class="kbd-legend">
   <span>L: Long</span> · <span>S: Short</span> · <span>R: Run screener</span> ·
-  <span>F: Fib</span> · <span>V: VP</span> · <span>T: Theme</span> ·
-  <span>A: Anchor VWAP</span> · <span>X: Clear anchor</span> ·
-  <span>[ / ]: RR ratio</span>
+  <span>T: Theme</span> · <span>A: Anchor VWAP</span> · <span>X: Clear anchor</span> ·
+  <span>[ / ]: RR ratio</span> ·
+  <span>Drawing: T=Trendline H=HRay F=Fib N=Note Esc=Select</span>
 </div>
 
 <script type="module" src="./main.js"></script>
 
-<!-- Inline mistake button toggle (no module needed) -->
 <script>
 document.addEventListener('click', e => {
   const btn = e.target.closest('.jrn-mistake-btn');

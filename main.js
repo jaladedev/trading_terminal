@@ -23,6 +23,10 @@ import { KlineWebSocket, TradeStream, fetchKlines, fetchKlinesFallback } from '.
 import { analyseSymbol, applyScreenerFilters, sortScreenerResults, detectSectorRotation, SCR_DEFAULT_COINS, SCR_CURATED_TIERS } from './services/screener.js';
 import { drawPrice, drawRSI, drawVolume, drawCVD } from './charts/draw.js';
 import { initJournal, openJournalEntry, saveJournalEntry, renderJournalList, renderJournalStats, exportJournal, deleteJournalTrade, editJournalTrade } from './components/journal.js';
+import { LWCChart } from './charts/lwc.js';
+import { backtesterHTML, btRun, btCompare, btExport, initBacktester } from './components/backtester.js';
+
+let _lwcChart = null;
 
 // Make key functions global (called from inline HTML onclick attributes)
 Object.assign(window, {
@@ -35,6 +39,7 @@ Object.assign(window, {
   runScreener, toggleScrAuto, setScrFilter, setScrTF,
   anchorToSessionOpen, clearAnchor, replayLoad, replayToggle, replayStep, replayReset,
   openJournalEntry,
+  btRun, btCompare, btExport,
 });
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -49,8 +54,8 @@ const FIB_CONFIGS = [
 ];
 
 // ── WebSocket Instances ───────────────────────────────────────────────────────
-let klineWs    = null;
-let tradeStream = null;
+let klineWs       = null;
+let tradeStream   = null;
 let indicatorWorker = null;
 let workerPending   = false;
 let workerQueue     = null;
@@ -85,6 +90,7 @@ export function init() {
 
   // Canvas resize
   window.addEventListener('resize', () => drawAll());
+  _lwcChart = new LWCChart('lwc-container', { theme: state.isDark ? 'dark' : 'light' });
 
   // Chart hover
   setupChartHover();
@@ -93,6 +99,11 @@ export function init() {
   renderWatchlist();
   renderAlerts();
   renderPnL();
+
+  // Inject backtester UI
+  const btSlot = document.getElementById('bt-placeholder');
+  if (btSlot) btSlot.outerHTML = backtesterHTML();
+  initBacktester();
 }
 
 // ── Symbol / TF Init ──────────────────────────────────────────────────────────
@@ -149,7 +160,7 @@ export async function initSym(sym, tf) {
         state.livePrice = candle.c;
         updatePriceDisplay();
         checkAlerts(candle.c);
-        computeAndRender();
+        drawLive();
       }
     },
     onStatus: setConnStatus,
@@ -198,9 +209,9 @@ function addCandleToState(c) {
 
   // VWAP
   const vwapRes = updVWAP(c, { cumPV: state.vwapCumPV, cumV: state.vwapCumV, m2: state.vwapM2, sessionKey: state.vwapSessionKey });
-  state.vwapCumPV    = vwapRes.newState.cumPV;
-  state.vwapCumV     = vwapRes.newState.cumV;
-  state.vwapM2       = vwapRes.newState.m2;
+  state.vwapCumPV     = vwapRes.newState.cumPV;
+  state.vwapCumV      = vwapRes.newState.cumV;
+  state.vwapM2        = vwapRes.newState.m2;
   state.vwapSessionKey= vwapRes.newState.sessionKey;
   state.vwapVals.push(vwapRes.vwap);
   state.vwapBandVals.push(vwapRes.bands);
@@ -236,8 +247,8 @@ function addCandleToState(c) {
 
 // ── Compute + Render ──────────────────────────────────────────────────────────
 function computeAndRender() {
-  const all    = [...state.candles, state.currentCandle].filter(Boolean);
-  const atr    = calcATR(all, 14);
+  const all = [...state.candles, state.currentCandle].filter(Boolean);
+  const atr = calcATR(all, 14);
 
   // Regime
   state.regime = detectRegime(all, state.e20s, state.livePrice);
@@ -305,43 +316,41 @@ function computeAndRender() {
 
 // ── Draw Coordinator ──────────────────────────────────────────────────────────
 function drawAll() {
-  const all      = [...state.candles, state.currentCandle].filter(Boolean);
-  const fibLevels = buildFibLevels(all);
-  const liveVwap  = computeLiveVwap(state.currentCandle, { cumPV: state.vwapCumPV, cumV: state.vwapCumV }, state.vwapVals[state.vwapVals.length-1], state.vwapSessionKey);
-  const liveBands = computeLiveBands(state.currentCandle, { cumPV: state.vwapCumPV, cumV: state.vwapCumV, m2: state.vwapM2 }, liveVwap);
+  if (!_lwcChart) return;
 
-  drawPrice({
-    canvasId: 'c-price',
-    candles: state.candles, currentCandle: state.currentCandle,
-    e9s: state.e9s, e20s: state.e20s, e50s: state.e50s,
-    vwapVals: state.vwapVals, vwapBandVals: state.vwapBandVals,
-    avwapVals: state.avwapVals, anchorIdx: state.anchorIdx,
-    liveVwap, liveBands, showVwapBands: state.showVwapBands,
-    crossovers: state.crossovers, hoverIdx: state.hoverIdx,
-    suggestion: state.suggestion,
-    fibLevels, overlayFib: state.overlayFib,
-    swingPoints: state.swingPoints, structureEvents: state.structureEvents,
-    sessionLevels: state.sessionLevels,
-    workerVP: state.workerVP, overlayVP: state.overlayVP,
+  _lwcChart.setData(state.candles, {
+    e9s:        state.e9s,
+    e20s:       state.e20s,
+    e50s:       state.e50s,
+    vwapVals:   state.vwapVals,
+    avwapVals:  state.avwapVals,
+    rsiVals:    state.rsiVals,
+    cvdVals:    state.cvdVals,
+    cvdEmaVals: state.cvdEmaVals,
   });
 
-  drawRSI({
-    canvasId: 'c-rsi',
-    candles: state.candles, currentCandle: state.currentCandle,
-    rsiVals: state.rsiVals, hoverIdx: state.hoverIdx,
-  });
+  if (state.suggestion?.entry) {
+    _lwcChart.setSuggestion(state.suggestion);
+  }
 
-  drawVolume({
-    canvasId: 'c-vol',
-    candles: state.candles, currentCandle: state.currentCandle,
-  });
+  if (state.sessionLevels) {
+    _lwcChart.setSessionLevels(state.sessionLevels);
+  }
 
-  drawCVD({
-    canvasId: 'c-cvd',
-    candles: state.candles, currentCandle: state.currentCandle,
-    cvdVals: state.cvdVals, cvdEmaVals: state.cvdEmaVals,
-    showCvdEma: state.showCvdEma,
-  });
+  if (state.structureEvents?.length) {
+    _lwcChart.setStructureEvents(state.candles, state.structureEvents);
+  }
+}
+
+// ── Live Candle Update (unconfirmed ticks only) ───────────────────────────────
+function drawLive() {
+  if (_lwcChart && state.currentCandle) {
+    const c = { ...state.currentCandle };
+    c._liveVwap = state.vwapVals[state.vwapVals.length - 1];
+    c._liveRsi  = state.rsiVals[state.rsiVals.length - 1];
+    c._liveCvd  = state.cvdVals[state.cvdVals.length - 1];
+    _lwcChart.updateLiveCandle(c);
+  }
 }
 
 function buildFibLevels(all) {
@@ -405,8 +414,8 @@ function updatePriceDisplay() {
   }
   state.prevLivePrice = state.livePrice;
 
-  const chg    = state.openPrice > 0 ? ((state.livePrice - state.openPrice) / state.openPrice * 100) : 0;
-  const chgEl  = document.getElementById('live-change');
+  const chg   = state.openPrice > 0 ? ((state.livePrice - state.openPrice) / state.openPrice * 100) : 0;
+  const chgEl = document.getElementById('live-change');
   if (chgEl) { chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%'; chgEl.style.color = chg >= 0 ? 'var(--green)' : 'var(--red)'; }
 }
 
@@ -428,11 +437,10 @@ function updateRegimeUI(regime) {
   const el = document.getElementById('regime-display');
   if (!el || !regime) return;
   const typeMap = { trending: regime.dir === 'bull' ? 'regime-trending-bull' : 'regime-trending-bear', ranging: 'regime-ranging', choppy: 'regime-choppy' };
-  el.className = 'regime-badge ' + (typeMap[regime.type] || '');
+  el.className  = 'regime-badge ' + (typeMap[regime.type] || '');
   el.textContent = regime.label;
   const advEl = document.getElementById('regime-advice');
   if (advEl) advEl.textContent = regime.advice || '';
-  // ADX / ER readouts
   const adxEl = document.getElementById('regime-adx'); if (adxEl) adxEl.textContent = regime.adx?.toFixed(1) ?? '—';
   const erEl  = document.getElementById('regime-er');  if (erEl)  erEl.textContent  = regime.er?.toFixed(2)  ?? '—';
 }
@@ -450,7 +458,7 @@ function updateStructureUI(swings, events) {
 
 function updateSuggestionUI(sug, quality, tps, trailStop, atrSize) {
   if (!sug) return;
-  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  const set      = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
   const setColor = (id, color) => { const el = document.getElementById(id); if (el) el.style.color = color; };
 
   set('sug-entry',  fmt(sug.entry));
@@ -460,7 +468,6 @@ function updateSuggestionUI(sug, quality, tps, trailStop, atrSize) {
   set('sug-dir',    sug.dir === 'long' ? '▲ LONG' : '▼ SHORT');
   setColor('sug-dir', sug.dir === 'long' ? 'var(--green)' : 'var(--red)');
 
-  // Entry quality
   if (quality) {
     set('entry-quality-score', quality.score);
     set('entry-quality-label', quality.label);
@@ -469,7 +476,6 @@ function updateSuggestionUI(sug, quality, tps, trailStop, atrSize) {
     set('entry-quality-factors', quality.factors.slice(0, 3).join(' · '));
   }
 
-  // TPs
   if (tps) {
     tps.forEach(tp => {
       set(`tp${tp.n}-price`, fmt(tp.tp));
@@ -477,10 +483,8 @@ function updateSuggestionUI(sug, quality, tps, trailStop, atrSize) {
     });
   }
 
-  // ATR trailing stop
   if (trailStop) set('atr-trail-val', fmt(trailStop));
 
-  // ATR position size
   if (atrSize) {
     set('atr-size-tokens', atrSize.tokens.toFixed(4));
     set('atr-size-value',  '$' + atrSize.positionValue.toFixed(2));
@@ -491,7 +495,7 @@ function updateSuggestionUI(sug, quality, tps, trailStop, atrSize) {
 
 function updateFuturesUI(metrics, leverage, entry) {
   if (!metrics) return;
-  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  const set      = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
   const setColor = (id, col) => { const el = document.getElementById(id); if (el) el.style.color = col; };
 
   set('fv-pos-size',  '$' + metrics.posSize.toFixed(2));
@@ -506,14 +510,12 @@ function updateFuturesUI(metrics, leverage, entry) {
   set('fee-close',    '$' + metrics.feeClose.toFixed(3));
   set('fee-tot',      '$' + metrics.feeTot.toFixed(3));
 
-  // Liquidation bar
   const liqBar = document.getElementById('liq-bar');
   if (liqBar) {
     liqBar.style.width      = metrics.liqGaugePct + '%';
     liqBar.style.background = metrics.liqDistPct < 10 ? 'var(--red)' : metrics.liqDistPct < 20 ? 'var(--amber)' : 'var(--green)';
   }
 
-  // Risk warning
   const warn = document.getElementById('risk-warn');
   if (warn) {
     const isHigh = metrics.riskPct > 3;
@@ -525,7 +527,7 @@ function updateFuturesUI(metrics, leverage, entry) {
 }
 
 function updateLegendLabels() {
-  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  const set  = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
   const vwap = state.vwapVals[state.vwapVals.length - 1];
   const cvd  = state.cvdVals[state.cvdVals.length - 1];
   set('leg-e9',   state.e9  ? fmt(state.e9)  : '—');
@@ -553,8 +555,8 @@ function switchSym(sym) { initSym(sym, state.tf); }
 function switchTF(tf)   { initSym(state.sym, tf); }
 function switchExchange(name, btn) {
   state.exchange = name;
-  document.querySelectorAll('#exch-group .pill-btn').forEach(b => b.classList.remove('active','sym-active'));
-  btn.classList.add('active','sym-active');
+  document.querySelectorAll('#exch-group .pill-btn').forEach(b => b.classList.remove('active', 'sym-active'));
+  btn.classList.add('active', 'sym-active');
   initSym(state.sym, state.tf);
 }
 
@@ -579,9 +581,9 @@ function toggleOverlay(key, btn) {
 function toggleTheme() {
   state.isDark = !state.isDark;
   document.body.classList.toggle('light', !state.isDark);
-  document.querySelector('.theme-btn')?.textContent === '🌙'
-    ? (document.querySelector('.theme-btn').textContent = '☀️')
-    : (document.querySelector('.theme-btn').textContent = '🌙');
+  _lwcChart?.setTheme(state.isDark ? 'dark' : 'light');
+  const btn = document.querySelector('.theme-btn');
+  if (btn) btn.textContent = state.isDark ? '🌙' : '☀️';
   drawAll();
 }
 
@@ -689,11 +691,11 @@ function logTrade(result) {
 }
 function clearPnL() { state.pnlTrades = []; state.tradeCount = 0; renderPnL(); }
 function renderPnL() {
-  const wins  = state.pnlTrades.filter(t => t.result === 'win').length;
-  const losses= state.pnlTrades.filter(t => t.result === 'loss').length;
-  const net   = state.pnlTrades.reduce((a, t) => a + t.pnl, 0);
-  const wr    = state.pnlTrades.length ? Math.round(wins / state.pnlTrades.length * 100) : 0;
-  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+  const wins   = state.pnlTrades.filter(t => t.result === 'win').length;
+  const losses = state.pnlTrades.filter(t => t.result === 'loss').length;
+  const net    = state.pnlTrades.reduce((a, t) => a + t.pnl, 0);
+  const wr     = state.pnlTrades.length ? Math.round(wins / state.pnlTrades.length * 100) : 0;
+  const set    = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
   set('pnl-net',    (net >= 0 ? '+' : '') + '$' + net.toFixed(2));
   set('pnl-wins',   wins);
   set('pnl-losses', losses);
@@ -763,8 +765,8 @@ function renderScreenerTable() {
   if (!rows.length) { tbody.innerHTML = '<tr><td colspan="14" class="scr-empty">No results</td></tr>'; return; }
   const top5 = new Set([...rows].sort((a,b)=>b.score-a.score).slice(0,5).map(r=>r.sym));
   tbody.innerHTML = rows.map(r => {
-    const chgCls = r.chgPct >= 0 ? 'pos' : 'neg';
-    const isTop5 = top5.has(r.sym);
+    const chgCls   = r.chgPct >= 0 ? 'pos' : 'neg';
+    const isTop5   = top5.has(r.sym);
     const rowStyle = isTop5 ? 'background:rgba(0,229,160,0.04);border-left:2px solid rgba(0,229,160,0.5)' : '';
     const scoreCol = r.score>=75?'#00e5a0':r.score>=50?'#4da6ff':r.score>=30?'#ffb82e':'#3d4460';
     return `<tr style="${rowStyle}">
@@ -951,9 +953,9 @@ function handleKeyDown(e) {
   if (k === 'S') { state.currentDir = 'short'; computeAndRender(); showToast('Direction: SHORT'); }
   if (k === 'R') runScreener();
   if (k === 'T') toggleTheme();
-  if (k === 'F') { state.overlayFib = !state.overlayFib; drawAll(); }
+  // F key removed: LWC toolbar handles fib drawing natively
   if (k === 'V') { state.overlayVP  = !state.overlayVP;  drawAll(); }
-  if (k === '[') { state.rrRatio = Math.max(1, state.rrRatio - 0.5); setRRRatio(state.rrRatio); }
+  if (k === '[') { state.rrRatio = Math.max(1, state.rrRatio - 0.5);  setRRRatio(state.rrRatio); }
   if (k === ']') { state.rrRatio = Math.min(10, state.rrRatio + 0.5); setRRRatio(state.rrRatio); }
   if (k === 'A') anchorToSessionOpen();
   if (k === 'X') clearAnchor();
