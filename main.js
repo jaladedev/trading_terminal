@@ -6,6 +6,7 @@ import { detectRegime, calcTrendAge, calcMomentumAcceleration } from './indicato
 import { detectSwingPoints, detectStructureBreaks, getSessionLevels } from './indicators/structure.js';
 import { computeSuggestion, scoreEntryQuality, computeEntryZones, computePartialTPs, calcAtrPositionSize } from './engine/signals.js';
 import { calcFuturesMetrics, calcRiskBasedSize, calcATRStop, calcATRTrailStop, calcDailyGoal, suggestLeverage } from './engine/risk.js';
+import { initRenderer, scheduleRender, cancelPendingRender, RenderPriority } from './engine/renderer.js';
 import { KlineWebSocket, TradeStream, fetchKlines, fetchKlinesFallback } from './services/exchange.js';
 import { analyseSymbol, applyScreenerFilters, sortScreenerResults, detectSectorRotation, SCR_DEFAULT_COINS, SCR_CURATED_TIERS } from './services/screener.js';
 import { initJournal, openJournalEntry, saveJournalEntry, renderJournalList, renderJournalStats, exportJournal, deleteJournalTrade, editJournalTrade } from './components/journal.js';
@@ -61,7 +62,7 @@ export function init() {
   state.exchange = saved?.exchange || 'bybit';
   state.watchlist = loadWatchlist();
 
-  // 2. Use Object.defineProperty if the store uses getters, otherwise direct assign.
+  // 2. Ensure AVWAP state fields exist
   _ensureAvwapState();
 
   // 2b. Seed leverage from DOM default so first computeAndRender() is never NaN.
@@ -88,20 +89,27 @@ export function init() {
   // 5. LWC chart — must exist before initSym() calls drawAll()
   _lwcChart = new LWCChart('lwc-container', { theme: state.isDark ? 'dark' : 'light' });
 
-  // 6. Start data feeds
+  // 6. Wire up render scheduler
+  initRenderer({
+    onFull:    computeAndRender,
+    onPartial: computePartial,
+    onLive:    renderLive,
+  });
+
+  // 7. Start data feeds
   initSym(state.sym, state.tf);
 
-  // 7. Global event listeners
+  // 8. Global event listeners
   document.addEventListener('keydown', handleKeyDown);
   window.addEventListener('resize', () => _lwcChart?._resize());
 
-  // 8. UI
+  // 9. UI
   setupChartHover();
   renderWatchlist();
   renderAlerts();
   renderPnL();
 
-  // 9. Phase 9 — inject backtester card
+  // 10. Phase 9 — inject backtester card
   const btSlot = document.getElementById('bt-placeholder');
   if (btSlot) btSlot.outerHTML = backtesterHTML();
   initBacktester();
@@ -109,10 +117,10 @@ export function init() {
 
 // Ensure all AVWAP fields exist on state, safe to call multiple times.
 function _ensureAvwapState() {
-  if (!Array.isArray(state.avwapVals)) state.avwapVals  = [];
-  if (typeof state.avwapCumPV !== 'number') state.avwapCumPV = 0;
-  if (typeof state.avwapCumV  !== 'number') state.avwapCumV  = 0;
-  if (state.anchorIdx === undefined) state.anchorIdx = null;
+  if (!Array.isArray(state.avwapVals))         state.avwapVals  = [];
+  if (typeof state.avwapCumPV !== 'number')    state.avwapCumPV = 0;
+  if (typeof state.avwapCumV  !== 'number')    state.avwapCumV  = 0;
+  if (state.anchorIdx === undefined)           state.anchorIdx  = null;
 }
 
 // ── Symbol / TF init ──────────────────────────────────────────────────────────
@@ -128,6 +136,9 @@ export async function initSym(sym, tf) {
   state.avwapCumV  = 0;
   state.anchorIdx  = null;
   _writeAvwapLabel();   // show "—" immediately while loading
+
+  // Cancel any stale renders from the previous symbol
+  cancelPendingRender();
 
   // Highlight active pills
   document.querySelectorAll('#sym-group .pill-btn').forEach(b => {
@@ -161,6 +172,7 @@ export async function initSym(sym, tf) {
     _applySessionAnchor(/* silent = */ true);
   }
 
+  // Run synchronously on load — no RAF delay needed here
   computeAndRender();
   dispatchToWorker([...state.candles]);
 
@@ -172,14 +184,13 @@ export async function initSym(sym, tf) {
       if (confirmed) {
         addCandleToState(candle);
         state.currentCandle = null;
-        computeAndRender();
+        scheduleRender(RenderPriority.PARTIAL);
         dispatchToWorker([...state.candles]);
       } else {
         state.currentCandle = candle;
         state.livePrice     = candle.c;
-        updatePriceDisplay();
         checkAlerts(candle.c);
-        drawLive();
+        scheduleRender(RenderPriority.LIVE);
       }
     },
     onStatus: setConnStatus,
@@ -278,14 +289,22 @@ function addCandleToState(c) {
     if (state.anchorIdx !== null) {
       state.anchorIdx--;
       if (state.anchorIdx < 0) {
-        // Anchor candle was evicted
-        state.anchorIdx  = null;
-        state.avwapVals  = [];
-        state.avwapCumPV = 0;
-        state.avwapCumV  = 0;
-        _anchorMode      = null;   // clear module-level mode too
-        _writeAvwapLabel();
-        showToast('AVWAP anchor evicted (window full) — re-anchor with A', 'warn');
+        if (_anchorMode === 'session') {
+          // Re-anchor to new oldest candle rather than wiping
+          state.anchorIdx  = 0;
+          state.avwapVals  = [];
+          state.avwapCumPV = 0;
+          state.avwapCumV  = 0;
+          recomputeAvwap();
+        } else {
+          state.anchorIdx  = null;
+          state.avwapVals  = [];
+          state.avwapCumPV = 0;
+          state.avwapCumV  = 0;
+          _anchorMode      = null;
+          _writeAvwapLabel();
+          showToast('AVWAP anchor evicted (window full) — re-anchor with A', 'warn');
+        }
       } else {
         state.avwapVals.shift();
       }
@@ -304,39 +323,59 @@ function _appendAvwapBar(c) {
   state.avwapCumV  += vol;
   const v = state.avwapCumV > 0
     ? state.avwapCumPV / state.avwapCumV
-    : c.c;  // fallback to close, never push null/NaN
+    : c.c;
   if (v != null && !isNaN(v)) state.avwapVals.push(v);
 }
+
 // Safe single read-point for latest AVWAP value.
 function _getLatestAvwap() {
   if (!Array.isArray(state.avwapVals) || state.avwapVals.length === 0) return null;
   const v = state.avwapVals[state.avwapVals.length - 1];
-  console.log('[getLatest] v=', v, 'type=', typeof v, 'isNaN=', isNaN(v), 'null?', v == null);
   return (v != null && !isNaN(v)) ? v : null;
 }
 
-// ── compute + render (full refresh) ──────────────────────────────────────────
+// ── FULL render — regime + structure + signals + chart ────────────────────────
 function computeAndRender() {
   const all = [...state.candles, state.currentCandle].filter(Boolean);
   const atr = calcATR(all, 14);
 
-  // Market regime
+  // Heavy: regime + structure
   state.regime = detectRegime(all, state.e20s, state.livePrice);
 
-  // Swing structure
   if (all.length >= 10) {
     state.swingPoints     = detectSwingPoints(all.slice(-60), 3, 3);
     state.structureEvents = detectStructureBreaks(all.slice(-60), state.swingPoints);
   }
 
-  // Session levels
   state.sessionLevels = getSessionLevels(all);
 
+  _computeSignalsAndUI(all, atr);
+  updateRegimeUI(state.regime);
+  updateStructureUI(state.swingPoints, state.structureEvents);
+  drawAll();
+}
+
+// ── PARTIAL render — confirmed candle, reuse cached regime/structure ──────────
+function computePartial() {
+  const all = [...state.candles, state.currentCandle].filter(Boolean);
+  const atr = calcATR(all, 14);
+  // Skip regime + structure recalc — reuse state.regime / state.structureEvents
+  _computeSignalsAndUI(all, atr);
+  drawAll();
+}
+
+// ── LIVE render — unconfirmed tick, price + chart paint only ──────────────────
+function renderLive() {
+  updatePriceDisplay();
+  drawLive();
+}
+
+// ── Shared: signals, suggestions, UI (used by full and partial) ───────────────
+function _computeSignalsAndUI(all, atr) {
   const latestRSI   = state.rsiVals[state.rsiVals.length - 1];
   const latestVwap  = state.vwapVals[state.vwapVals.length - 1];
-  const latestAvwap = _getLatestAvwap();   // null when no anchor set
+  const latestAvwap = _getLatestAvwap();
 
-  // Trade suggestion
   const sug = computeSuggestion({
     e9: state.e9, e20: state.e20, e50: state.e50,
     livePrice: state.livePrice, rsi: latestRSI, rrRatio: state.rrRatio,
@@ -346,7 +385,6 @@ function computeAndRender() {
   });
   if (sug) state.suggestion = sug;
 
-  // Entry quality
   const cvdLast = state.cvdVals[state.cvdVals.length - 1];
   const quality = scoreEntryQuality({
     dir: state.currentDir, rsi: latestRSI, e9: state.e9, e20: state.e20, e50: state.e50,
@@ -356,20 +394,16 @@ function computeAndRender() {
     crossovers: state.crossovers, tf: state.tf, candles: all, regime: state.regime,
   });
 
-  // Entry zones
   const zones = computeEntryZones({ e9: state.e9, e20: state.e20, livePrice: state.livePrice, suggestion: sug, atr });
   if (zones) state.entryZones = zones;
   updateEntryZonesUI(zones);
 
-  // Partial TPs + ATR trail
   const tps       = computePartialTPs({ entry: sug?.entry, stop: sug?.stop, dir: sug?.dir });
   const trailStop = calcATRTrailStop(state.livePrice, atr, state.currentDir, 2);
 
-  // ATR position sizing
   const capital = +document.getElementById('inp-capital')?.value || 100;
   const atrSize = atr ? calcAtrPositionSize({ capital, riskPct: 1, entry: state.livePrice, atr, atrMultiple: 2 }) : null;
 
-  // Futures metrics
   const leverage = state.leverage || 10;
   const margin   = +document.getElementById('inp-margin')?.value || 20;
   const entryRaw = document.getElementById('inp-entry')?.value;
@@ -382,14 +416,10 @@ function computeAndRender() {
     dir: state.currentDir, rrRatio: state.rrRatio, feeType: state.feeType,
   });
 
-  // Push to DOM
   updateSuggestionUI(sug, quality, tps, trailStop, atrSize);
   updateFuturesUI(futMetrics, leverage, entry);
-  updateRegimeUI(state.regime);
-  updateStructureUI(state.swingPoints, state.structureEvents);
   updateLegendLabels();
-  _writeAvwapLabel(); 
-  drawAll();
+  _writeAvwapLabel();
 }
 
 // ── Chart draw (full dataset) ─────────────────────────────────────────────────
@@ -430,8 +460,6 @@ function drawLive() {
   }
 
   _lwcChart.updateLiveCandle(c);
-
-  // Refresh the AVWAP DOM label on every live tick — fixes "—" between confirmed bars.
   _writeAvwapLabel();
 }
 
@@ -458,7 +486,7 @@ function dispatchToWorker(candles) {
 function onWorkerResult(data) {
   if (data.vp) { state.workerVP = data.vp; updateVPLabels(data.vp); }
   if (data.regime) state.regime = { ...state.regime, ...data.regime };
-  drawAll();
+  scheduleRender(RenderPriority.PARTIAL);
 }
 
 // ── Trade tick (order-flow delta) ─────────────────────────────────────────────
@@ -624,8 +652,6 @@ function updateLegendLabels() {
   set('leg-e20',  state.e20 ? fmt(state.e20) : '—');
   set('leg-e50',  state.e50 ? fmt(state.e50) : '—');
 
-  // FIX: write BOTH vwap elements — leg-vwap (card-structure) and leg-vwap2 (card-ema).
-  // Previously leg-vwap2 was never written and always showed its initial "—".
   const vwapStr = vwap ? fmt(vwap) : '—';
   set('leg-vwap',  vwapStr);
   set('leg-vwap2', vwapStr);
@@ -659,15 +685,15 @@ function switchExchange(name, btn) {
   initSym(state.sym, state.tf);
 }
 
-function setDirection(dir) { state.currentDir = dir; computeAndRender(); }
-function setRRRatio(v)     { state.rrRatio = +v || 2; computeAndRender(); }
+function setDirection(dir) { state.currentDir = dir; scheduleRender(RenderPriority.FULL); }
+function setRRRatio(v)     { state.rrRatio = +v || 2; scheduleRender(RenderPriority.FULL); }
 
 function toggleOverlay(key, btn) {
   if (key === 'fib') state.overlayFib = !state.overlayFib;
   if (key === 'vp')  state.overlayVP  = !state.overlayVP;
   if (key === 'div') state.overlayDiv = !state.overlayDiv;
   btn?.classList.toggle('active');
-  drawAll();
+  scheduleRender(RenderPriority.FULL);
 }
 
 function toggleTheme() {
@@ -900,12 +926,6 @@ function showProgress(show) {
 }
 
 // ── Anchored VWAP ─────────────────────────────────────────────────────────────
-
-/**
- * Finds the session-open candle index and sets the anchor.
- * Also sets _anchorMode so initSym() re-applies it after symbol/TF switches.
- * @param {boolean} silent - if true, suppresses the toast (used on auto re-apply)
- */
 function _applySessionAnchor(silent = false) {
   if (!state.candles.length) {
     if (!silent) showToast('No candle data');
@@ -949,43 +969,22 @@ export function clearAnchor() {
   drawAll();
 }
 
-/**
- * Writes the avwap-val DOM element.
- * Reads from _getLatestAvwap() — the single safe read-point.
- * Called from: anchorToSessionOpen, clearAnchor, updateLegendLabels, drawLive.
- */
 function _writeAvwapLabel() {
   const el = document.getElementById('avwap-val');
   if (!el) return;
   const avwap = _getLatestAvwap();
-  console.log('[AVWAP label] value:', avwap, 'livePrice:', state.livePrice); // TEMP
   if (avwap != null) {
     el.textContent = fmt(avwap);
     el.style.color = (state.livePrice && state.livePrice >= avwap) ? 'var(--green)' : 'var(--red)';
   } else {
-    el.textContent = '\u2014';   // —
+    el.textContent = '\u2014';
     el.style.color = '';
   }
 }
 
-/**
- * Rebuilds state.avwapVals from state.candles[anchorIdx..] in full.
- * Also resets and persists avwapCumPV/V so _appendAvwapBar stays O(1).
- */
 function recomputeAvwap() {
   if (state.anchorIdx === null) return;
   const slice = state.candles.slice(state.anchorIdx);
-  
-  // TEMP DIAGNOSTIC — remove after fixing
-  console.log('[AVWAP] anchorIdx:', state.anchorIdx, 
-              'candles total:', state.candles.length,
-              'slice length:', slice.length);
-  if (slice.length > 0) {
-    const c0 = slice[0];
-    console.log('[AVWAP] first candle:', JSON.stringify(c0));
-    console.log('[AVWAP] has volume?', c0.v, typeof c0.v);
-  }
-
   let cumPV = 0, cumV = 0;
   state.avwapVals = slice.map(c => {
     const tp  = (c.h + c.l + c.c) / 3;
@@ -994,14 +993,10 @@ function recomputeAvwap() {
     cumV  += vol;
     return cumV > 0 ? cumPV / cumV : c.c;
   });
-  
-  // TEMP DIAGNOSTIC
-  console.log('[AVWAP] avwapVals length:', state.avwapVals.length, 
-              'last value:', state.avwapVals[state.avwapVals.length - 1]);
-  
   state.avwapCumPV = cumPV;
   state.avwapCumV  = cumV;
 }
+
 // ── Replay ────────────────────────────────────────────────────────────────────
 async function replayLoad() {
   const btn = document.getElementById('replay-load-btn');
@@ -1105,11 +1100,11 @@ function setupChartHover() {
 function handleKeyDown(e) {
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   const k = e.key.toUpperCase();
-  if (k === 'L') { state.currentDir = 'long';  computeAndRender(); showToast('Direction: LONG');  }
-  if (k === 'S') { state.currentDir = 'short'; computeAndRender(); showToast('Direction: SHORT'); }
+  if (k === 'L') { state.currentDir = 'long';  scheduleRender(RenderPriority.FULL); showToast('Direction: LONG');  }
+  if (k === 'S') { state.currentDir = 'short'; scheduleRender(RenderPriority.FULL); showToast('Direction: SHORT'); }
   if (k === 'R') runScreener();
   if (k === 'T') toggleTheme();
-  if (k === 'V') { state.overlayVP = !state.overlayVP; drawAll(); }
+  if (k === 'V') { state.overlayVP = !state.overlayVP; scheduleRender(RenderPriority.FULL); }
   if (k === '[') { state.rrRatio = Math.max(1,  state.rrRatio - 0.5); setRRRatio(state.rrRatio); }
   if (k === ']') { state.rrRatio = Math.min(10, state.rrRatio + 0.5); setRRRatio(state.rrRatio); }
   if (k === 'A') anchorToSessionOpen();
