@@ -9,6 +9,8 @@ import { state } from '../state/store.js';
 
 // ── Exchange Definitions ──────────────────────────────────────────────────────
 
+const WORKER = 'https://terminal.ayodejialalade29.workers.dev';
+
 export const EXCHANGES = {
   bybit: {
     name: 'Bybit',
@@ -20,7 +22,7 @@ export const EXCHANGES = {
     wsKlineConfirm: msg => msg?.data?.[0]?.confirm,
     wsKlineToCandle: k  => ({ t:+k.start, o:+k.open, h:+k.high, l:+k.low, c:+k.close, v:+k.volume }),
     wsTradeToTick:   t  => ({ price:+t.p, qty:+t.v, side: t.S==='Buy'?'buy':'sell', ts:+t.T }),
-    klineUrl: (sym, tf) => `https://api.bybit.com/v5/market/kline?category=spot&symbol=${sym}&interval=${BY_TF[tf]||'5'}&limit=500`,
+    klineUrl: (sym, tf) => `${WORKER}?exchange=bybit&sym=${sym}&tf=${BY_TF[tf]||'5'}`,
     parseKlines: d => (d?.result?.list||[]).slice().reverse().map(k=>({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5]})),
     parseWsKlines: msg => msg?.data || [],
   },
@@ -29,17 +31,13 @@ export const EXCHANGES = {
     name: 'Binance',
     wsUrl:      'wss://stream.binance.com:9443/stream',
     tradeWsUrl: 'wss://stream.binance.com:9443/stream',
-    wsSub: (sym, tf) => ({
-      method:'SUBSCRIBE',
-      params:[`${sym.toLowerCase()}@kline_${tf}`],
-      id:1
-    }),
+    wsSub: (sym, tf) => ({ method:'SUBSCRIBE', params:[`${sym.toLowerCase()}@kline_${tf}`], id:1 }),
     tradeSub: sym => ({ method:'SUBSCRIBE', params:[`${sym.toLowerCase()}@aggTrade`], id:2 }),
     wsPing: () => ({ method:'LIST_SUBSCRIPTIONS', id:99 }),
     wsKlineConfirm: msg => msg?.data?.k?.x || msg?.k?.x,
     wsKlineToCandle: k => { const kd=k.k||k; return {t:+kd.t,o:+kd.o,h:+kd.h,l:+kd.l,c:+kd.c,v:+kd.v}; },
     wsTradeToTick:   t => { const d=t.data||t; return {price:+d.p,qty:+d.q,side:d.m?'sell':'buy',ts:+d.T}; },
-    klineUrl: (sym, tf) => `https://api.binance.com/api/v3/klines?symbol=${sym}&interval=${tf}&limit=500`,
+    klineUrl: (sym, tf) => `${WORKER}?exchange=binance&sym=${sym}&tf=${tf}`,
     parseKlines: d => (Array.isArray(d)?d:[]).map(k=>({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5]})),
     parseWsKlines: msg => {
       const k = msg?.data?.k || msg?.k;
@@ -63,10 +61,7 @@ export const EXCHANGES = {
     wsKlineConfirm: msg => msg?.data?.[0]?.[8]==='1',
     wsKlineToCandle: k  => ({ t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5] }),
     wsTradeToTick:   t  => ({ price:+t.px,qty:+t.sz,side:t.side==='buy'?'buy':'sell',ts:+t.ts }),
-    klineUrl: (sym, tf) => {
-      const instId = sym.replace('USDT','-USDT');
-      return `https://www.okx.com/api/v5/market/candles?instId=${instId}&bar=${OKX_TF_REST[tf]||'5m'}&limit=500`;
-    },
+    klineUrl: (sym, tf) => `${WORKER}?exchange=okx&sym=${sym}&tf=${OKX_TF_REST[tf]||'5m'}`,
     parseKlines: d => (d?.data||[]).slice().reverse().map(k=>({t:+k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5]})),
     parseWsKlines: msg => msg?.data || [],
   },
