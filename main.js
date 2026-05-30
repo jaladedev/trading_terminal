@@ -12,6 +12,7 @@ import { analyseSymbol, applyScreenerFilters, sortScreenerResults, detectSectorR
 import { initJournal, openJournalEntry, saveJournalEntry, renderJournalList, renderJournalStats, exportJournal, deleteJournalTrade, editJournalTrade } from './components/journal.js';
 import { LWCChart } from './charts/lwc.js';
 import { backtesterHTML, btRun, btCompare, btExport, initBacktester } from './components/backtester.js';
+import * as dom from './ui/dom.js';
 
 // ── Module-level chart reference ──────────────────────────────────────────────
 let _lwcChart = null;
@@ -31,6 +32,10 @@ Object.assign(window, {
   btRun, btCompare, btExport,
   computeAndRender,
   renderScreenerTable,
+  clearScreenerFilter: () => {
+    const el = dom.el['scr-text-filter'];
+    if (el) { el.value = ''; el.dispatchEvent(new Event('input')); }
+  },
 });
 
 // ── Constants ─────────────────────────────────────────────────────────────────
@@ -50,72 +55,72 @@ let indicatorWorker = null;
 let workerPending   = false;
 let workerQueue     = null;
 
-// ── AVWAP module-level anchor memory ─────────────────────────────────────────
-let _anchorMode = null;   // null | 'session'
+// ── AVWAP anchor memory ───────────────────────────────────────────────────────
+let _anchorMode = null;
 
 // ── Boot ──────────────────────────────────────────────────────────────────────
 export function init() {
-  // 1. Load persisted settings
+  // 1. Resolve all static DOM refs once
+  dom.init();
+
+  // 2. Load persisted settings
   const saved    = loadSettings();
   state.sym      = saved?.sym      || 'BTCUSDT';
   state.tf       = saved?.tf       || '5m';
   state.exchange = saved?.exchange || 'bybit';
   state.watchlist = loadWatchlist();
 
-  // 2. Ensure AVWAP state fields exist
+  // 3. Ensure AVWAP state fields exist
   _ensureAvwapState();
 
-  // 2b. Seed leverage from DOM default so first computeAndRender() is never NaN.
-  const levSlider  = document.getElementById('lev-slider');
-  const levManual  = document.getElementById('lev-manual');
-  const levDisplay = document.getElementById('lev-display');
-  const initLev    = +(levSlider?.value ?? 10);
-  state.leverage   = initLev;
-  if (levManual)  levManual.value        = initLev;
-  if (levDisplay) levDisplay.textContent = initLev + '×';
-  if (levSlider)  levSlider.style.setProperty('--lev-pct', ((initLev - 1) / 99 * 100) + '%');
+  // 4. Seed leverage from DOM default
+  const initLev = +(dom.el['lev-slider']?.value ?? 10);
+  state.leverage = initLev;
+  if (dom.el['lev-manual'])  dom.el['lev-manual'].value        = initLev;
+  if (dom.el['lev-display']) dom.el['lev-display'].textContent = initLev + '×';
+  if (dom.el['lev-slider'])  dom.el['lev-slider'].style.setProperty('--lev-pct', ((initLev - 1) / 99 * 100) + '%');
 
-  // 3. Restore collapsed state
+  // 5. Restore collapsed state
   const collapsed = loadCollapsed();
   Object.entries(collapsed).forEach(([id, isCollapsed]) => {
     const el = document.getElementById(id);
     if (el && isCollapsed) el.classList.add('collapsed');
   });
 
-  // 4. Sub-system init
+  // 6. Sub-system init
   initJournal();
   initIndicatorWorker();
 
-  // 5. LWC chart — must exist before initSym() calls drawAll()
+  // 7. LWC chart
   _lwcChart = new LWCChart('lwc-container', { theme: state.isDark ? 'dark' : 'light' });
 
-  // 6. Wire up render scheduler
+  // 8. Wire up render scheduler
   initRenderer({
     onFull:    computeAndRender,
     onPartial: computePartial,
     onLive:    renderLive,
   });
 
-  // 7. Start data feeds
+  // 9. Start data feeds
   initSym(state.sym, state.tf);
 
-  // 8. Global event listeners
+  // 10. Global event listeners
   document.addEventListener('keydown', handleKeyDown);
   window.addEventListener('resize', () => _lwcChart?._resize());
 
-  // 9. UI
+  // 11. UI
   setupChartHover();
   renderWatchlist();
   renderAlerts();
   renderPnL();
 
-  // 10. Phase 9 — inject backtester card
-  const btSlot = document.getElementById('bt-placeholder');
+  // 12. Phase 9 — inject backtester card, then resolve its lazy DOM refs
+  const btSlot = dom.el['bt-placeholder'];
   if (btSlot) btSlot.outerHTML = backtesterHTML();
   initBacktester();
+  dom.resolveLazy();
 }
 
-// Ensure all AVWAP fields exist on state, safe to call multiple times.
 function _ensureAvwapState() {
   if (!Array.isArray(state.avwapVals))         state.avwapVals  = [];
   if (typeof state.avwapCumPV !== 'number')    state.avwapCumPV = 0;
@@ -130,17 +135,15 @@ export async function initSym(sym, tf) {
   resetCandleState();
 
   _ensureAvwapState();
-
   state.avwapVals  = [];
   state.avwapCumPV = 0;
   state.avwapCumV  = 0;
   state.anchorIdx  = null;
-  _writeAvwapLabel();   // show "—" immediately while loading
+  _writeAvwapLabel();
 
-  // Cancel any stale renders from the previous symbol
   cancelPendingRender();
 
-  // Highlight active pills
+  // Highlight active pills — read once per switch (not hot path)
   document.querySelectorAll('#sym-group .pill-btn').forEach(b => {
     b.classList.remove('active', 'sym-active');
     const m = b.getAttribute('onclick')?.match(/'([A-Z]+)'/);
@@ -154,7 +157,6 @@ export async function initSym(sym, tf) {
   document.title = `${fmtSym(sym)} · ${tf} — TradingTerminal`;
   setConnStatus('warn', `Loading ${fmtSym(sym)}…`);
 
-  // Fetch historical candles
   const res = await fetchKlinesFallback(sym, tf);
   if (res?.candles?.length) {
     res.candles.forEach(c => addCandleToState(c));
@@ -169,14 +171,12 @@ export async function initSym(sym, tf) {
   updatePriceDisplay();
 
   if (_anchorMode === 'session') {
-    _applySessionAnchor(/* silent = */ true);
+    _applySessionAnchor(true);
   }
 
-  // Run synchronously on load — no RAF delay needed here
   computeAndRender();
   dispatchToWorker([...state.candles]);
 
-  // Live kline WebSocket
   klineWs?.close();
   klineWs = new KlineWebSocket({
     exchName: state.exchange, sym, tf,
@@ -197,7 +197,6 @@ export async function initSym(sym, tf) {
   });
   klineWs.connect();
 
-  // Trade stream (for CVD delta)
   tradeStream?.close();
   tradeStream = new TradeStream({
     exchName: state.exchange, sym,
@@ -210,13 +209,11 @@ export async function initSym(sym, tf) {
 
 // ── Candle state update ───────────────────────────────────────────────────────
 function addCandleToState(c) {
-  // Dedup by timestamp
   if (state.candles.length > 0 && c.t) {
     const last = state.candles[state.candles.length - 1].t;
     if (last && c.t <= last) return;
   }
 
-  // EMA
   const prevE9 = state.e9, prevE20 = state.e20;
   state.e9  = updEMA(state.e9,  c.c, emaK(9));
   state.e20 = updEMA(state.e20, c.c, emaK(20));
@@ -225,7 +222,6 @@ function addCandleToState(c) {
   state.e20s.push(state.e20);
   state.e50s.push(state.e50);
 
-  // RSI
   const rsiRes = calcWilderRSI(c.c, state.prevClose, {
     avgGain:  state.rmaAvgGain,
     avgLoss:  state.rmaAvgLoss,
@@ -239,7 +235,6 @@ function addCandleToState(c) {
   state.rsiVals.push(rsiRes.rsi);
   state.prevClose   = c.c;
 
-  // VWAP
   const vwapRes = updVWAP(c, {
     cumPV:      state.vwapCumPV,
     cumV:       state.vwapCumV,
@@ -253,7 +248,6 @@ function addCandleToState(c) {
   state.vwapVals.push(vwapRes.vwap);
   state.vwapBandVals.push(vwapRes.bands);
 
-  // CVD
   const cvdRes = updCVD(c, state.cvdRunning, state.cvdEmaRun, state.CVD_EMA_K, state.cvdResetMode, state.cvdSessionKey);
   state.cvdRunning    = cvdRes.newRunning;
   state.cvdEmaRun     = cvdRes.newEmaRun;
@@ -261,7 +255,6 @@ function addCandleToState(c) {
   state.cvdVals.push(state.cvdRunning);
   state.cvdEmaVals.push(state.cvdEmaRun);
 
-  // EMA crossover detection
   if (prevE9 !== null && prevE20 !== null) {
     const bullCross = prevE9 <= prevE20 && state.e9 > state.e20;
     const bearCross = prevE9 >= prevE20 && state.e9 < state.e20;
@@ -278,7 +271,6 @@ function addCandleToState(c) {
     _appendAvwapBar(c);
   }
 
-  // Trim ring-buffer to 150 bars
   if (state.candles.length > 150) {
     state.candles.shift();
     state.e9s.shift();   state.e20s.shift();  state.e50s.shift();
@@ -290,7 +282,6 @@ function addCandleToState(c) {
       state.anchorIdx--;
       if (state.anchorIdx < 0) {
         if (_anchorMode === 'session') {
-          // Re-anchor to new oldest candle rather than wiping
           state.anchorIdx  = 0;
           state.avwapVals  = [];
           state.avwapCumPV = 0;
@@ -321,25 +312,21 @@ function _appendAvwapBar(c) {
   const vol = (c.v > 0) ? c.v : 0;
   state.avwapCumPV += tp * vol;
   state.avwapCumV  += vol;
-  const v = state.avwapCumV > 0
-    ? state.avwapCumPV / state.avwapCumV
-    : c.c;
+  const v = state.avwapCumV > 0 ? state.avwapCumPV / state.avwapCumV : c.c;
   if (v != null && !isNaN(v)) state.avwapVals.push(v);
 }
 
-// Safe single read-point for latest AVWAP value.
 function _getLatestAvwap() {
   if (!Array.isArray(state.avwapVals) || state.avwapVals.length === 0) return null;
   const v = state.avwapVals[state.avwapVals.length - 1];
   return (v != null && !isNaN(v)) ? v : null;
 }
 
-// ── FULL render — regime + structure + signals + chart ────────────────────────
+// ── FULL render ───────────────────────────────────────────────────────────────
 function computeAndRender() {
   const all = [...state.candles, state.currentCandle].filter(Boolean);
   const atr = calcATR(all, 14);
 
-  // Heavy: regime + structure
   state.regime = detectRegime(all, state.e20s, state.livePrice);
 
   if (all.length >= 10) {
@@ -349,32 +336,44 @@ function computeAndRender() {
 
   state.sessionLevels = getSessionLevels(all);
 
-  _computeSignalsAndUI(all, atr);
-  updateRegimeUI(state.regime);
-  updateStructureUI(state.swingPoints, state.structureEvents);
+  // Gather all writes, flush together
+  dom.batch(() => {
+    _computeSignalsAndUI(all, atr);
+    updateRegimeUI(state.regime);
+    updateStructureUI(state.swingPoints, state.structureEvents);
+  });
+
   drawAll();
 }
 
-// ── PARTIAL render — confirmed candle, reuse cached regime/structure ──────────
+// ── PARTIAL render ────────────────────────────────────────────────────────────
 function computePartial() {
   const all = [...state.candles, state.currentCandle].filter(Boolean);
   const atr = calcATR(all, 14);
-  // Skip regime + structure recalc — reuse state.regime / state.structureEvents
-  _computeSignalsAndUI(all, atr);
+
+  dom.batch(() => _computeSignalsAndUI(all, atr));
   drawAll();
 }
 
-// ── LIVE render — unconfirmed tick, price + chart paint only ──────────────────
+// ── LIVE render ───────────────────────────────────────────────────────────────
 function renderLive() {
+  // Price display is hot — update directly without batch overhead
   updatePriceDisplay();
   drawLive();
 }
 
-// ── Shared: signals, suggestions, UI (used by full and partial) ───────────────
+// ── Shared: signals + all UI writes (runs inside dom.batch) ──────────────────
 function _computeSignalsAndUI(all, atr) {
   const latestRSI   = state.rsiVals[state.rsiVals.length - 1];
   const latestVwap  = state.vwapVals[state.vwapVals.length - 1];
   const latestAvwap = _getLatestAvwap();
+
+  // Read all input values in one pass (reads before any writes)
+  const capital  = +(dom.el['inp-capital']?.value)  || 100;
+  const margin   = +(dom.el['inp-margin']?.value)   || 20;
+  const entryRaw = dom.el['inp-entry']?.value;
+  const stopRaw  = dom.el['inp-stop']?.value;
+  const leverage = state.leverage || 10;
 
   const sug = computeSuggestion({
     e9: state.e9, e20: state.e20, e50: state.e50,
@@ -396,29 +395,24 @@ function _computeSignalsAndUI(all, atr) {
 
   const zones = computeEntryZones({ e9: state.e9, e20: state.e20, livePrice: state.livePrice, suggestion: sug, atr });
   if (zones) state.entryZones = zones;
-  updateEntryZonesUI(zones);
 
   const tps       = computePartialTPs({ entry: sug?.entry, stop: sug?.stop, dir: sug?.dir });
   const trailStop = calcATRTrailStop(state.livePrice, atr, state.currentDir, 2);
+  const atrSize   = atr ? calcAtrPositionSize({ capital, riskPct: 1, entry: state.livePrice, atr, atrMultiple: 2 }) : null;
 
-  const capital = +document.getElementById('inp-capital')?.value || 100;
-  const atrSize = atr ? calcAtrPositionSize({ capital, riskPct: 1, entry: state.livePrice, atr, atrMultiple: 2 }) : null;
-
-  const leverage = state.leverage || 10;
-  const margin   = +document.getElementById('inp-margin')?.value || 20;
-  const entryRaw = document.getElementById('inp-entry')?.value;
-  const stopRaw  = document.getElementById('inp-stop')?.value;
-  const entry    = (entryRaw !== '' && +entryRaw) ? +entryRaw : (sug?.entry || state.livePrice);
-  const stop     = (stopRaw  !== '' && +stopRaw)  ? +stopRaw  : (sug?.stop  || 0);
+  const entry = (entryRaw !== '' && +entryRaw) ? +entryRaw : (sug?.entry || state.livePrice);
+  const stop  = (stopRaw  !== '' && +stopRaw)  ? +stopRaw  : (sug?.stop  || 0);
 
   const futMetrics = calcFuturesMetrics({
     capital, margin, leverage, entry, stop,
     dir: state.currentDir, rrRatio: state.rrRatio, feeType: state.feeType,
   });
 
+  // All writes happen here — inside the batch callback
   updateSuggestionUI(sug, quality, tps, trailStop, atrSize);
   updateFuturesUI(futMetrics, leverage, entry);
-  updateLegendLabels();
+  updateEntryZonesUI(zones);
+  updateLegendLabels(latestVwap, cvdLast);
   _writeAvwapLabel();
 }
 
@@ -442,7 +436,7 @@ function drawAll() {
   }
 }
 
-// ── Live candle paint (unconfirmed tick) ──────────────────────────────────────
+// ── Live candle paint ─────────────────────────────────────────────────────────
 function drawLive() {
   if (!_lwcChart || !state.currentCandle) return;
 
@@ -451,10 +445,9 @@ function drawLive() {
   c._liveRsi  = state.rsiVals[state.rsiVals.length - 1];
   c._liveCvd  = state.cvdVals[state.cvdVals.length - 1];
 
-  // Live AVWAP for the forming bar (does not commit to avwapVals)
   if (state.anchorIdx !== null && state.avwapCumV > 0) {
-    const tp    = (c.h + c.l + c.c) / 3;
-    const vol   = c.v > 0 ? c.v : 0;
+    const tp  = (c.h + c.l + c.c) / 3;
+    const vol = c.v > 0 ? c.v : 0;
     const liveV = state.avwapCumV + vol;
     c._liveAvwap = liveV > 0 ? (state.avwapCumPV + tp * vol) / liveV : null;
   }
@@ -484,7 +477,10 @@ function dispatchToWorker(candles) {
 }
 
 function onWorkerResult(data) {
-  if (data.vp) { state.workerVP = data.vp; updateVPLabels(data.vp); }
+  if (data.vp) {
+    state.workerVP = data.vp;
+    dom.batch(() => updateVPLabels(data.vp));
+  }
   if (data.regime) state.regime = { ...state.regime, ...data.regime };
   scheduleRender(RenderPriority.PARTIAL);
 }
@@ -499,179 +495,194 @@ function processTradeTick({ price, qty, side }) {
   updateDeltaTicker();
 }
 
-// ── DOM updaters ──────────────────────────────────────────────────────────────
+// ── DOM updaters — all use cached refs, no getElementById ─────────────────────
+
 function updatePriceDisplay() {
-  const el = document.getElementById('live-price');
-  if (!el) return;
-  const prev = state.prevLivePrice;
-  el.textContent = fmt(state.livePrice);
-  if (prev) {
-    el.classList.remove('flash-green', 'flash-red');
-    void el.offsetWidth;
-    el.classList.add(state.livePrice >= prev ? 'flash-green' : 'flash-red');
+  const priceEl  = dom.el['live-price'];
+  const changeEl = dom.el['live-change'];
+  if (!priceEl) return;
+
+  const formatted = fmt(state.livePrice);
+  const prev      = state.prevLivePrice;
+
+  if (priceEl.textContent !== formatted) {
+    priceEl.textContent = formatted;
+    if (prev) {
+      // Use dom.flashPrice — no forced reflow (replaces void el.offsetWidth)
+      dom.flashPrice(priceEl, state.livePrice >= prev ? 'up' : 'down');
+    }
   }
   state.prevLivePrice = state.livePrice;
 
-  const chg   = state.openPrice > 0 ? ((state.livePrice - state.openPrice) / state.openPrice * 100) : 0;
-  const chgEl = document.getElementById('live-change');
-  if (chgEl) {
-    chgEl.textContent = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
-    chgEl.style.color = chg >= 0 ? 'var(--green)' : 'var(--red)';
+  if (changeEl && state.openPrice > 0) {
+    const chg = (state.livePrice - state.openPrice) / state.openPrice * 100;
+    const txt = (chg >= 0 ? '+' : '') + chg.toFixed(2) + '%';
+    if (changeEl.textContent !== txt) {
+      changeEl.textContent = txt;
+      changeEl.style.color = chg >= 0 ? 'var(--green)' : 'var(--red)';
+    }
   }
 }
 
 function setConnStatus(type, msg) {
-  const el = document.getElementById('conn-status');
+  const el = dom.el['conn-status'];
   if (!el) return;
   el.textContent = msg;
   el.className   = 'conn-status ' + type;
 }
 
 function updateVPLabels(vp) {
-  const g = id => document.getElementById(id);
-  if (g('vp-poc-val')) g('vp-poc-val').textContent = fmt(vp.poc);
-  if (g('vp-vah-val')) g('vp-vah-val').textContent = fmt(vp.vah);
-  if (g('vp-val-val')) g('vp-val-val').textContent = fmt(vp.val);
+  dom.setText(dom.el['vp-poc-val'], fmt(vp.poc));
+  dom.setText(dom.el['vp-vah-val'], fmt(vp.vah));
+  dom.setText(dom.el['vp-val-val'], fmt(vp.val));
 }
 
 function updateEntryZonesUI(zones) {
   if (!zones) return;
-  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-  set('zone-agg', fmt(zones.aggressive));
-  set('zone-bal', fmt(zones.balanced));
-  set('zone-con', fmt(zones.conservative));
+  dom.setText(dom.el['zone-agg'], fmt(zones.aggressive));
+  dom.setText(dom.el['zone-bal'], fmt(zones.balanced));
+  dom.setText(dom.el['zone-con'], fmt(zones.conservative));
 }
 
 function updateRegimeUI(regime) {
-  const el = document.getElementById('regime-display');
+  const el = dom.el['regime-display'];
   if (!el || !regime) return;
   const typeMap = {
     trending: regime.dir === 'bull' ? 'regime-trending-bull' : 'regime-trending-bear',
     ranging:  'regime-ranging',
     choppy:   'regime-choppy',
   };
-  el.className   = 'regime-badge ' + (typeMap[regime.type] || '');
-  el.textContent = regime.label;
-  const advEl = document.getElementById('regime-advice'); if (advEl) advEl.textContent = regime.advice || '';
-  const adxEl = document.getElementById('regime-adx');    if (adxEl) adxEl.textContent = regime.adx?.toFixed(1) ?? '—';
-  const erEl  = document.getElementById('regime-er');     if (erEl)  erEl.textContent  = regime.er?.toFixed(2)  ?? '—';
+  const cls = 'regime-badge ' + (typeMap[regime.type] || '');
+  if (el.className !== cls)      el.className   = cls;
+  if (el.textContent !== regime.label) el.textContent = regime.label;
+  dom.setText(dom.el['regime-advice'], regime.advice || '');
+  dom.setText(dom.el['regime-adx'],    regime.adx?.toFixed(1) ?? '—');
+  dom.setText(dom.el['regime-er'],     regime.er?.toFixed(2)  ?? '—');
 }
 
 function updateStructureUI(swings, events) {
-  const el = document.getElementById('structure-events');
+  const el = dom.el['structure-events'];
   if (!el) return;
   const recent = (events || []).slice(-5).reverse();
-  if (!recent.length) {
-    el.innerHTML = '<span style="color:var(--text3);font-size:9px;font-family:var(--mono)">No recent structure breaks</span>';
-    return;
-  }
-  el.innerHTML = recent.map(ev => {
-    const cls = `struct-${ev.type.toLowerCase()}-${ev.dir}`;
-    return `<span class="signal-badge ${cls}" style="font-size:8px;padding:1px 7px">${ev.type} ${ev.dir === 'bull' ? '↑' : '↓'}</span>`;
-  }).join('');
+  const html = recent.length
+    ? recent.map(ev => {
+        const cls = `struct-${ev.type.toLowerCase()}-${ev.dir}`;
+        return `<span class="signal-badge ${cls}" style="font-size:8px;padding:1px 7px">${ev.type} ${ev.dir === 'bull' ? '↑' : '↓'}</span>`;
+      }).join('')
+    : '<span style="color:var(--text3);font-size:9px;font-family:var(--mono)">No recent structure breaks</span>';
+  if (el.innerHTML !== html) el.innerHTML = html;
 }
 
 function updateSuggestionUI(sug, quality, tps, trailStop, atrSize) {
   if (!sug) return;
-  const set      = (id, val)   => { const el = document.getElementById(id); if (el) el.textContent = val; };
-  const setColor = (id, color) => { const el = document.getElementById(id); if (el) el.style.color  = color; };
 
-  set('sug-entry',  fmt(sug.entry));
-  set('sug-stop',   fmt(sug.stop));
-  set('sug-target', fmt(sug.target));
-  set('sug-reason', sug.reason || '');
-  set('sug-dir',    sug.dir === 'long' ? '▲ LONG' : '▼ SHORT');
-  setColor('sug-dir', sug.dir === 'long' ? 'var(--green)' : 'var(--red)');
+  dom.setText(dom.el['sug-entry'],  fmt(sug.entry));
+  dom.setText(dom.el['sug-stop'],   fmt(sug.stop));
+  dom.setText(dom.el['sug-target'], fmt(sug.target));
+  dom.setText(dom.el['sug-reason'], sug.reason || '');
+
+  const dirTxt   = sug.dir === 'long' ? '▲ LONG' : '▼ SHORT';
+  const dirColor = sug.dir === 'long' ? 'var(--green)' : 'var(--red)';
+  dom.setText(dom.el['sug-dir'], dirTxt);
+  dom.setStyle(dom.el['sug-dir'], 'color', dirColor);
 
   if (quality) {
-    set('entry-quality-score', quality.score);
-    set('entry-quality-label', quality.label);
-    const qEl = document.getElementById('entry-quality-label');
-    if (qEl) qEl.style.color = quality.score >= 75 ? 'var(--green)' : quality.score >= 50 ? 'var(--amber)' : 'var(--red)';
-    set('entry-quality-factors', quality.factors.slice(0, 3).join(' · '));
+    dom.setText(dom.el['entry-quality-score'], quality.score);
+    dom.setText(dom.el['entry-quality-label'], quality.label);
+    const labelColor = quality.score >= 75 ? 'var(--green)' : quality.score >= 50 ? 'var(--amber)' : 'var(--red)';
+    dom.setStyle(dom.el['entry-quality-label'], 'color', labelColor);
+    dom.setText(dom.el['entry-quality-factors'], quality.factors.slice(0, 3).join(' · '));
   }
 
   if (tps) {
-    tps.forEach(tp => {
-      set(`tp${tp.n}-price`, fmt(tp.tp));
-      set(`tp${tp.n}-pct`,   '+' + tp.pct.toFixed(2) + '%');
-    });
+    for (const tp of tps) {
+      dom.setText(dom.el[`tp${tp.n}-price`], fmt(tp.tp));
+      dom.setText(dom.el[`tp${tp.n}-pct`],   '+' + tp.pct.toFixed(2) + '%');
+    }
   }
 
-  if (trailStop) set('atr-trail-val', fmt(trailStop));
+  dom.setText(dom.el['atr-trail-val'], trailStop ? fmt(trailStop) : '—');
 
   if (atrSize) {
-    set('atr-size-tokens', atrSize.tokens.toFixed(4));
-    set('atr-size-value',  '$' + atrSize.positionValue.toFixed(2));
-    set('atr-size-risk',   '$' + atrSize.riskUSD.toFixed(2));
-    set('atr-stop-dist',   atrSize.stopDistPct.toFixed(2) + '%');
+    dom.setText(dom.el['atr-size-tokens'], atrSize.tokens.toFixed(4));
+    dom.setText(dom.el['atr-size-value'],  '$' + atrSize.positionValue.toFixed(2));
+    dom.setText(dom.el['atr-size-risk'],   '$' + atrSize.riskUSD.toFixed(2));
+    dom.setText(dom.el['atr-stop-dist'],   atrSize.stopDistPct.toFixed(2) + '%');
   }
 }
 
 function updateFuturesUI(metrics, leverage, entry) {
   if (!metrics) return;
-  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
 
-  set('fv-pos-size',  '$' + metrics.posSize.toFixed(2));
-  set('fv-liq-price', fmt(metrics.liqPrice));
-  set('fv-liq-dist',  metrics.liqDistPct.toFixed(1) + '%');
-  set('fv-profit',    '$' + metrics.profitNet.toFixed(2));
-  set('fv-loss',      '$' + Math.abs(metrics.lossNet).toFixed(2));
-  set('fv-roi-win',   metrics.roiWin.toFixed(2) + '%');
-  set('fv-roi-loss',  metrics.roiLoss.toFixed(2) + '%');
-  set('fv-be-price',  fmt(metrics.bePrice));
-  set('fee-open',     '$' + metrics.feeOpen.toFixed(3));
-  set('fee-close',    '$' + metrics.feeClose.toFixed(3));
-  set('fee-tot',      '$' + metrics.feeTot.toFixed(3));
+  dom.setText(dom.el['fv-pos-size'],  '$' + metrics.posSize.toFixed(2));
+  dom.setText(dom.el['fv-liq-price'], fmt(metrics.liqPrice));
+  dom.setText(dom.el['fv-liq-dist'],  metrics.liqDistPct.toFixed(1) + '%');
+  dom.setText(dom.el['fv-profit'],    '$' + metrics.profitNet.toFixed(2));
+  dom.setText(dom.el['fv-loss'],      '$' + Math.abs(metrics.lossNet).toFixed(2));
+  dom.setText(dom.el['fv-roi-win'],   metrics.roiWin.toFixed(2) + '%');
+  dom.setText(dom.el['fv-roi-loss'],  metrics.roiLoss.toFixed(2) + '%');
+  dom.setText(dom.el['fv-be-price'],  fmt(metrics.bePrice));
+  dom.setText(dom.el['fee-open'],     '$' + metrics.feeOpen.toFixed(3));
+  dom.setText(dom.el['fee-close'],    '$' + metrics.feeClose.toFixed(3));
+  dom.setText(dom.el['fee-tot'],      '$' + metrics.feeTot.toFixed(3));
 
-  const liqBar = document.getElementById('liq-bar');
+  const liqBar = dom.el['liq-bar'];
   if (liqBar) {
-    liqBar.style.width      = metrics.liqGaugePct + '%';
-    liqBar.style.background = metrics.liqDistPct < 10
+    const pct = metrics.liqGaugePct + '%';
+    const bg  = metrics.liqDistPct < 10
       ? 'var(--red)' : metrics.liqDistPct < 20 ? 'var(--amber)' : 'var(--green)';
+    dom.setStyle(liqBar, 'width',      pct);
+    dom.setStyle(liqBar, 'background', bg);
   }
 
-  const warn = document.getElementById('risk-warn');
+  const warn = dom.el['risk-warn'];
   if (warn) {
     const isHigh = metrics.riskPct > 3;
     const isMed  = metrics.riskPct > 2 && !isHigh;
-    warn.style.display = (isHigh || isMed) ? '' : 'none';
-    warn.className     = 'risk-warn ' + (isHigh ? 'high' : 'med');
+    dom.show(warn, isHigh || isMed);
     if (isHigh || isMed) {
+      warn.className   = 'risk-warn ' + (isHigh ? 'high' : 'med');
       warn.textContent = `⚠ Risk is ${metrics.riskPct.toFixed(1)}% of capital — ${isHigh ? 'consider reducing leverage or size' : 'acceptable but elevated'}.`;
     }
   }
 }
 
-function updateLegendLabels() {
-  const set  = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-  const vwap = state.vwapVals[state.vwapVals.length - 1];
-  const cvd  = state.cvdVals[state.cvdVals.length - 1];
-
-  set('leg-e9',   state.e9  ? fmt(state.e9)  : '—');
-  set('leg-e20',  state.e20 ? fmt(state.e20) : '—');
-  set('leg-e50',  state.e50 ? fmt(state.e50) : '—');
+// Takes pre-computed values to avoid re-reading state inside the batch
+function updateLegendLabels(vwap, cvd) {
+  dom.setText(dom.el['leg-e9'],   state.e9  ? fmt(state.e9)  : '—');
+  dom.setText(dom.el['leg-e20'],  state.e20 ? fmt(state.e20) : '—');
+  dom.setText(dom.el['leg-e50'],  state.e50 ? fmt(state.e50) : '—');
 
   const vwapStr = vwap ? fmt(vwap) : '—';
-  set('leg-vwap',  vwapStr);
-  set('leg-vwap2', vwapStr);
+  dom.setText(dom.el['leg-vwap'],  vwapStr);
+  dom.setText(dom.el['leg-vwap2'], vwapStr);
 
-  if (cvd !== undefined) set('leg-cvd', (cvd >= 0 ? '+' : '') + fmtK(cvd));
-
-  _writeAvwapLabel();
+  if (cvd !== undefined) {
+    dom.setText(dom.el['leg-cvd'], (cvd >= 0 ? '+' : '') + fmtK(cvd));
+  }
 }
 
 function updateDeltaTicker() {
   const net = state.tradeBuyVol - state.tradeSellVol;
   const tot = state.tradeBuyVol + state.tradeSellVol || 1;
   const pct = Math.round(state.tradeBuyVol / tot * 100);
-  const set = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-  set('delta-buy',  fmtK(state.tradeBuyVol));
-  set('delta-sell', fmtK(state.tradeSellVol));
-  const netEl = document.getElementById('delta-net');
-  if (netEl) { netEl.textContent = (net >= 0 ? '+' : '') + fmtK(net); netEl.style.color = net >= 0 ? 'var(--green)' : 'var(--red)'; }
-  const bar = document.getElementById('delta-ratio-bar');
-  if (bar) { bar.style.width = pct + '%'; bar.style.background = net >= 0 ? 'var(--green)' : 'var(--red)'; }
+
+  dom.setText(dom.el['delta-buy'],  fmtK(state.tradeBuyVol));
+  dom.setText(dom.el['delta-sell'], fmtK(state.tradeSellVol));
+
+  const netEl = dom.el['delta-net'];
+  if (netEl) {
+    const netTxt = (net >= 0 ? '+' : '') + fmtK(net);
+    const netCol = net >= 0 ? 'var(--green)' : 'var(--red)';
+    dom.setText(netEl, netTxt);
+    dom.setStyle(netEl, 'color', netCol);
+  }
+
+  const bar = dom.el['delta-ratio-bar'];
+  if (bar) {
+    dom.setStyle(bar, 'width',      pct + '%');
+    dom.setStyle(bar, 'background', net >= 0 ? 'var(--green)' : 'var(--red)');
+  }
 }
 
 // ── UI actions ────────────────────────────────────────────────────────────────
@@ -718,10 +729,10 @@ function loadCoinFromScreener(sym) {
 
 // ── Alerts ────────────────────────────────────────────────────────────────────
 function addAlert() {
-  const price = +document.getElementById('alrt-price')?.value;
+  const price = +(dom.el['alrt-price']?.value);
   if (!price) return;
   state.alerts.push({ id: Date.now(), sym: state.sym, price, dir: state.alertDir, triggered: false });
-  document.getElementById('alrt-price').value = '';
+  if (dom.el['alrt-price']) dom.el['alrt-price'].value = '';
   renderAlerts();
   if (Notification?.permission === 'default') Notification.requestPermission();
 }
@@ -730,7 +741,7 @@ function deleteAlert(id) { state.alerts = state.alerts.filter(a => a.id !== id);
 
 function toggleAlertDir() {
   state.alertDir = state.alertDir === 'above' ? 'below' : 'above';
-  const btn = document.getElementById('alrt-dir-btn');
+  const btn = dom.el['alrt-dir-btn'];
   if (btn) btn.textContent = state.alertDir === 'above' ? 'Above ▲' : 'Below ▼';
 }
 
@@ -750,7 +761,7 @@ function checkAlerts(price) {
 }
 
 function renderAlerts() {
-  const el = document.getElementById('alert-list');
+  const el = dom.el['alert-list'];
   if (!el) return;
   if (!state.alerts.length) { el.innerHTML = '<div class="alert-empty">No alerts set</div>'; return; }
   el.innerHTML = state.alerts.map(a => `
@@ -767,11 +778,11 @@ function renderAlerts() {
 
 // ── Watchlist ─────────────────────────────────────────────────────────────────
 function wlAdd() {
-  const v = document.getElementById('wl-inp')?.value.trim().toUpperCase().replace('/', '');
+  const v = dom.el['wl-inp']?.value.trim().toUpperCase().replace('/', '');
   if (!v) return;
   const sym = v.endsWith('USDT') ? v : v + 'USDT';
   if (!state.watchlist.includes(sym)) { state.watchlist.push(sym); saveWatchlist(state.watchlist); renderWatchlist(); }
-  document.getElementById('wl-inp').value = '';
+  if (dom.el['wl-inp']) dom.el['wl-inp'].value = '';
 }
 
 function wlRemove(s) {
@@ -780,7 +791,7 @@ function wlRemove(s) {
 }
 
 function renderWatchlist() {
-  const el = document.getElementById('wl-list');
+  const el = dom.el['wl-list'];
   if (!el) return;
   if (!state.watchlist.length) { el.innerHTML = '<span class="wl-empty">No coins added</span>'; return; }
   el.innerHTML = state.watchlist.map(s => `
@@ -793,8 +804,9 @@ function renderWatchlist() {
 // ── P&L tracker ───────────────────────────────────────────────────────────────
 function logTrade(result) {
   state.tradeCount++;
-  const profitEl = document.getElementById('fv-profit');
-  const lossEl   = document.getElementById('fv-loss');
+  // Read current display values from cached refs
+  const profitEl = dom.el['fv-profit'];
+  const lossEl   = dom.el['fv-loss'];
   const profit   = result === 'win'
     ? +(profitEl?.textContent?.replace(/[$,]/g, '')) || 0
     : -(+(lossEl?.textContent?.replace(/[$,]/g, '')) || 0);
@@ -814,14 +826,15 @@ function renderPnL() {
   const losses = state.pnlTrades.filter(t => t.result === 'loss').length;
   const net    = state.pnlTrades.reduce((a, t) => a + t.pnl, 0);
   const wr     = state.pnlTrades.length ? Math.round(wins / state.pnlTrades.length * 100) : 0;
-  const set    = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
-  set('pnl-net',    (net >= 0 ? '+' : '') + '$' + net.toFixed(2));
-  set('pnl-wins',   wins);
-  set('pnl-losses', losses);
-  set('pnl-wr',     state.pnlTrades.length ? wr + '%' : '—');
-  const netEl = document.getElementById('pnl-net');
-  if (netEl) netEl.style.color = net >= 0 ? 'var(--green)' : 'var(--red)';
-  const tbody = document.getElementById('pnl-tbody');
+
+  const netTxt = (net >= 0 ? '+' : '') + '$' + net.toFixed(2);
+  dom.setText(dom.el['pnl-net'],    netTxt);
+  dom.setText(dom.el['pnl-wins'],   wins);
+  dom.setText(dom.el['pnl-losses'], losses);
+  dom.setText(dom.el['pnl-wr'],     state.pnlTrades.length ? wr + '%' : '—');
+  dom.setStyle(dom.el['pnl-net'], 'color', net >= 0 ? 'var(--green)' : 'var(--red)');
+
+  const tbody = dom.el['pnl-tbody'];
   if (!tbody) return;
   if (!state.pnlTrades.length) {
     tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:12px;font-family:var(--mono);font-size:10px">No trades logged</td></tr>';
@@ -852,9 +865,10 @@ function exportPnL() {
 async function runScreener() {
   if (state.scrRunning) return;
   state.scrRunning = true;
-  const btn = document.getElementById('scr-run-btn');
+
+  const btn = dom.el['scr-run-btn'];
   if (btn) { btn.disabled = true; btn.textContent = '⏳ Scanning…'; }
-  showProgress(true);
+  dom.show(dom.el['scr-progress'], true);
 
   const coins = state.scrCoinList?.length ? state.scrCoinList : SCR_DEFAULT_COINS;
   const tfs   = [...state.scrTFs];
@@ -863,10 +877,8 @@ async function runScreener() {
 
   const rawData = await batchFetchScreener(coins, tfs, exch, ({ done, total, sym }) => {
     const pct = Math.round(done / total * 100);
-    const bar = document.getElementById('scr-progress-bar');
-    const lbl = document.getElementById('scr-progress-lbl');
-    if (bar) bar.style.width = pct + '%';
-    if (lbl) lbl.textContent = `${done}/${total} — ${sym}`;
+    dom.setStyle(dom.el['scr-progress-bar'], 'width', pct + '%');
+    dom.setText(dom.el['scr-progress-lbl'], `${done}/${total} — ${sym}`);
   });
 
   state.scrResults = [];
@@ -878,15 +890,19 @@ async function runScreener() {
   renderScreenerTable();
   state.scrRunning = false;
   if (btn) { btn.disabled = false; btn.textContent = '▶ Run'; }
-  showProgress(false);
+  dom.show(dom.el['scr-progress'], false);
   showToast(`Screener done: ${state.scrResults.length} symbols`);
 }
 
 function renderScreenerTable() {
-  const tbody = document.getElementById('scr-tbody');
+  const tbody = dom.el['scr-tbody'];
   if (!tbody) return;
-  let rows = applyScreenerFilters(state.scrResults, state.scrFilter);
+
+  const textQ = dom.el['scr-text-filter']?.value.trim().toUpperCase() || '';
+  let rows = applyScreenerFilters(state.scrResults, state.scrFilter)
+    .filter(r => !textQ || r.sym.includes(textQ) || r.sym.replace('USDT','').includes(textQ));
   rows = sortScreenerResults(rows, state.scrSortKey, state.scrSortAsc);
+
   if (!rows.length) { tbody.innerHTML = '<tr><td colspan="7" class="scr-empty">No results</td></tr>'; return; }
   const top5 = new Set([...rows].sort((a, b) => b.score - a.score).slice(0, 5).map(r => r.sym));
   tbody.innerHTML = rows.map(r => {
@@ -918,11 +934,6 @@ function toggleScrAuto() {
   state.scrAutoOn = !state.scrAutoOn;
   if (state.scrAutoOn) { runScreener(); scrAutoTimer = setInterval(runScreener, 60_000); }
   else { clearInterval(scrAutoTimer); scrAutoTimer = null; }
-}
-
-function showProgress(show) {
-  const el = document.getElementById('scr-progress');
-  if (el) el.style.display = show ? '' : 'none';
 }
 
 // ── Anchored VWAP ─────────────────────────────────────────────────────────────
@@ -970,15 +981,15 @@ export function clearAnchor() {
 }
 
 function _writeAvwapLabel() {
-  const el = document.getElementById('avwap-val');
+  const el    = dom.el['avwap-val'];
   if (!el) return;
   const avwap = _getLatestAvwap();
   if (avwap != null) {
-    el.textContent = fmt(avwap);
-    el.style.color = (state.livePrice && state.livePrice >= avwap) ? 'var(--green)' : 'var(--red)';
+    dom.setText(el, fmt(avwap));
+    dom.setStyle(el, 'color', (state.livePrice && state.livePrice >= avwap) ? 'var(--green)' : 'var(--red)');
   } else {
-    el.textContent = '\u2014';
-    el.style.color = '';
+    dom.setText(el, '—');
+    dom.setStyle(el, 'color', '');
   }
 }
 
@@ -999,7 +1010,7 @@ function recomputeAvwap() {
 
 // ── Replay ────────────────────────────────────────────────────────────────────
 async function replayLoad() {
-  const btn = document.getElementById('replay-load-btn');
+  const btn = dom.el['replay-load-btn'];
   if (btn) { btn.textContent = '⏳ Loading…'; btn.disabled = true; }
   const res = await fetchKlinesFallback(state.sym, state.tf);
   if (!res?.candles?.length) {
@@ -1015,9 +1026,9 @@ async function replayLoad() {
   resetCandleState();
   _ensureAvwapState();
   setConnStatus('warn', `Replay · ${res.candles.length} candles · ${fmtSym(state.sym)}`);
-  document.getElementById('replay-play-btn').disabled = false;
-  document.getElementById('replay-play-btn').textContent = '▶ Play';
-  document.getElementById('replay-progress-lbl').textContent = `0 / ${res.candles.length}`;
+  dom.el['replay-play-btn'].disabled = false;
+  dom.setText(dom.el['replay-play-btn'], '▶ Play');
+  dom.setText(dom.el['replay-progress-lbl'], `0 / ${res.candles.length}`);
   if (btn) { btn.textContent = '✓ Loaded'; btn.disabled = false; }
   showToast(`Replay ready: ${res.candles.length} candles`);
   drawAll();
@@ -1026,20 +1037,23 @@ async function replayLoad() {
 function replayToggle() {
   if (!state.replayData.length) { showToast('Load history first'); return; }
   state.replayActive = !state.replayActive;
-  const btn = document.getElementById('replay-play-btn');
-  if (btn) { btn.textContent = state.replayActive ? '⏸ Pause' : '▶ Play'; btn.classList.toggle('active', state.replayActive); }
+  const btn = dom.el['replay-play-btn'];
+  if (btn) {
+    btn.textContent = state.replayActive ? '⏸ Pause' : '▶ Play';
+    btn.classList.toggle('active', state.replayActive);
+  }
   if (state.replayActive) replayTick();
 }
 
 function replayTick() {
   if (!state.replayActive || state.replayIdx >= state.replayData.length) {
     state.replayActive = false;
-    const btn = document.getElementById('replay-play-btn');
+    const btn = dom.el['replay-play-btn'];
     if (btn) { btn.textContent = '▶ Done'; btn.classList.remove('active'); }
     return;
   }
   replayStep();
-  const speed = +document.getElementById('replay-speed')?.value || 2;
+  const speed = +(dom.el['replay-speed']?.value) || 2;
   state.timers.replayTimer = setTimeout(replayTick, Math.max(50, 400 / speed));
 }
 
@@ -1050,7 +1064,7 @@ function replayStep() {
   state.livePrice = c.c;
   updatePriceDisplay();
   computeAndRender();
-  document.getElementById('replay-progress-lbl').textContent = `${state.replayIdx} / ${state.replayData.length}`;
+  dom.setText(dom.el['replay-progress-lbl'], `${state.replayIdx} / ${state.replayData.length}`);
   if (state.replayIdx % 10 === 0) dispatchToWorker([...state.candles]);
 }
 
@@ -1060,9 +1074,9 @@ function replayReset() {
   state.replayIdx = 0;
   resetCandleState();
   _ensureAvwapState();
-  const btn = document.getElementById('replay-play-btn');
+  const btn = dom.el['replay-play-btn'];
   if (btn) { btn.textContent = '▶ Play'; btn.classList.remove('active'); }
-  document.getElementById('replay-progress-lbl').textContent = `0 / ${state.replayData.length}`;
+  dom.setText(dom.el['replay-progress-lbl'], `0 / ${state.replayData.length}`);
   drawAll();
   showToast('Replay reset');
 }
@@ -1084,7 +1098,7 @@ function playCrossSound(type) { playBeep(type === 'bull' ? 660 : 440); }
 
 // ── Toast ─────────────────────────────────────────────────────────────────────
 export function showToast(msg, cls = '') {
-  const t = document.getElementById('toast');
+  const t = dom.el['toast'];
   if (!t) return;
   t.textContent = msg; t.className = 'toast show ' + cls;
   clearTimeout(t._tid); t._tid = setTimeout(() => t.classList.remove('show'), 3200);
