@@ -1022,10 +1022,11 @@ function renderScreenerTable() {
   rows = sortScreenerResults(rows, scrSortKey, scrSortAsc);
 
   if (!rows.length) {
-    tbody.innerHTML = '<tr><td colspan="13" class="scr-empty">No results — run a scan first</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="14" class="scr-empty">No results — run a scan first</td></tr>';
     return;
   }
 
+  // Apply column sort hints once
   const thead = document.querySelector('#scr-table thead tr');
   if (thead && !thead.dataset.hintsApplied) {
     const hints = [
@@ -1033,21 +1034,19 @@ function renderScreenerTable() {
       ['price',  'Last traded price'],
       ['chg',    '24-hour price change %'],
       ['signal', 'EMA 9/20/50 stack direction'],
-      ['rsi',    'RSI-14 momentum (>70 overbought, <30 oversold)'],
+      ['rsi',    'RSI-14 (>70 overbought, <30 oversold)'],
       ['score',  'Composite setup quality score (0–100)'],
       ['stack',  'EMA order: 9 vs 20 vs 50'],
-      ['mtf',    'Multi-timeframe confluence — agreeing TFs / total TFs'],
-      ['vol',    'Volume vs 20-bar average (🔥 ≥2x spike, ⚡ ≥1.5x hot)'],
+      ['mtf',    'Weighted multi-timeframe confluence — higher TFs count more'],
+      ['vol',    'Volume vs 20-bar avg · ✓ direction-aligned · ⚠ opposed'],
       ['dist',   '% distance of price from EMA20'],
-      ['hlpos',  'Price position within 24h high–low range'],
-      ['age',    'Candles elapsed since last EMA9/20 crossover'],
+      ['hlpos',  'Price in 24h range · ✓ = good entry side · ⚠ = extended'],
+      ['age',    'Candles since last EMA9/20 cross'],
+      ['fib',    'Nearest Fib level and direction'],
     ];
     const ths = thead.querySelectorAll('th');
-    hints.forEach(([key, tip], i) => {
-      if (ths[i]) {
-        ths[i].setAttribute('title', tip);
-        ths[i].style.cursor = 'pointer';
-      }
+    hints.forEach(([, tip], i) => {
+      if (ths[i]) { ths[i].setAttribute('title', tip); ths[i].style.cursor = 'pointer'; }
     });
     thead.dataset.hintsApplied = '1';
   }
@@ -1058,47 +1057,107 @@ function renderScreenerTable() {
     const chgCls   = r.chgPct >= 0 ? 'pos' : 'neg';
     const isTop5   = top5.has(r.sym);
     const rowStyle = isTop5 ? 'background:rgba(0,229,160,0.04);border-left:2px solid rgba(0,229,160,0.5)' : '';
+
+    // Score bar
     const scoreCol = r.score >= 75 ? '#00e5a0' : r.score >= 50 ? '#4da6ff' : r.score >= 30 ? '#ffb82e' : '#3d4460';
+
+    // EMA stack
     const stackCol = r.bullStack ? '#00e5a0' : r.bearStack ? '#ff3d5a' : '#ffb82e';
     const stackTxt = r.bullStack ? '9>20>50' : r.bearStack ? '9<20<50' : '⚠ MIX';
-    const volCol   = r.volSpike ? '#00e5a0' : r.volHot ? '#ffb82e' : 'var(--text2)';
-    const volBg    = r.volSpike ? 'rgba(0,229,160,0.10)' : r.volHot ? 'rgba(255,184,46,0.08)' : 'transparent';
-    const volIcon  = r.volSpike ? '🔥' : r.volHot ? '⚡' : '';
-    const volStr   = r.volRatio != null ? r.volRatio.toFixed(1) + 'x' : '—';
-    const distAbs  = r.e20dist != null ? Math.abs(r.e20dist) : null;
-    const distCol  = distAbs != null ? (distAbs <= 1 ? '#00e5a0' : distAbs > 5 ? '#ff3d5a' : 'var(--text2)') : 'var(--text2)';
-    const distStr  = distAbs != null ? (r.e20dist >= 0 ? '+' : '-') + distAbs.toFixed(1) + '%' : '—';
+
+    // MTF — weighted score + higher-TF conflict warning
+    const mtfStr = r.availTFs > 0 ? `${r.mtfScore}%` : '—';
+    const mtfCol = r.higherTFConflict ? '#ff3d5a'
+                 : r.mtfFull          ? '#00e5a0'
+                 : r.mtfMost          ? '#ffb82e'
+                 :                      'var(--text2)';
+    const mtfTitle = r.higherTFConflict ? 'Higher TF contradicts signal' : '';
+
+    // Volume — direction-aware marks
+    const volCol  = r.volSpike && r.volAligned  ? '#00e5a0'
+                  : r.volSpike && r.volOpposed  ? '#ff3d5a'
+                  : r.volHot                    ? '#ffb82e'
+                  :                               'var(--text2)';
+    const volBg   = r.volSpike && r.volAligned  ? 'rgba(0,229,160,0.10)'
+                  : r.volSpike && r.volOpposed  ? 'rgba(255,61,90,0.10)'
+                  : r.volHot                    ? 'rgba(255,184,46,0.08)'
+                  :                               'transparent';
+    const volMark = r.volSpike && r.volAligned  ? '🔥✓'
+                  : r.volSpike && r.volOpposed  ? '🔥⚠'
+                  : r.volHot  && r.volAligned   ? '⚡✓'
+                  : r.volHot                    ? '⚡'
+                  :                               '';
+    const volStr  = r.volRatio != null ? r.volRatio.toFixed(1) + 'x' : '—';
+
+    // EMA20 distance
+    const distAbs = r.e20dist != null ? Math.abs(r.e20dist) : null;
+    const distCol = distAbs != null ? (distAbs <= 1 ? '#00e5a0' : distAbs > 5 ? '#ff3d5a' : 'var(--text2)') : 'var(--text2)';
+    const distStr = distAbs != null ? (r.e20dist >= 0 ? '+' : '-') + distAbs.toFixed(1) + '%' : '—';
+
+    // H/L position with signal-aware mark
     const hlPos    = r.hlPos ?? 50;
     const hlBarCol = hlPos >= 80 ? '#ff3d5a' : hlPos <= 20 ? '#00e5a0' : '#4da6ff';
     const hlLabel  = hlPos >= 80 ? 'High' : hlPos <= 20 ? 'Low' : Math.round(hlPos) + '%';
-    const hlMark   = (signal === 'bull' && nearLow) ? ' ✓' 
-                  : (signal === 'bear' && nearHigh) ? ' ✓'
-                  : (signal === 'bull' && nearHigh) ? ' ⚠'
-                  : (signal === 'bear' && nearLow)  ? ' ⚠'
-                  : '';
-    const mtfStr   = r.availTFs > 0 ? `${Math.max(r.bullCount, r.bearCount)}/${r.availTFs}` : '—';
-    const mtfCol   = r.mtfFull ? '#00e5a0' : r.mtfMost ? '#ffb82e' : 'var(--text2)';
-    const ageTxt   = r.trendAge != null ? r.trendAge + 'c' : '—';
-    const ageCol   = r.trendAge <= 3 ? '#00e5a0' : r.trendAge <= 10 ? '#ffb82e' : 'var(--text3)';
+    const hlMark   = (r.signal === 'bull' && r.nearLow)   ? ' ✓'
+                   : (r.signal === 'bear' && r.nearHigh)  ? ' ✓'
+                   : (r.signal === 'bull' && r.nearHigh)  ? ' ⚠'
+                   : (r.signal === 'bear' && r.nearLow)   ? ' ⚠'
+                   :                                         '';
+    const hlMarkCol = hlMark === ' ✓' ? '#00e5a0' : hlMark === ' ⚠' ? '#ffb82e' : hlBarCol;
+
+    // Trend age
+    const ageTxt = r.trendAge != null ? r.trendAge + 'c' : '—';
+    const ageCol  = r.trendAge <= 3  ? '#00e5a0'
+                  : r.trendAge <= 8  ? '#4da6ff'
+                  : r.trendAge <= 40 ? 'var(--text3)'
+                  :                    '#ff3d5a'; // very old trend
+
+    // Fib column
+    let fibTxt = '—', fibCol = 'var(--text3)';
+    if (r.fibProximity) {
+      const { label, tier, dir, dirLabel } = r.fibProximity;
+      fibTxt = `${label} ${dirLabel}`;
+      fibCol = tier === 'gold' ? '#a78bff'
+             : tier === 'key'  ? '#4da6ff'
+             :                   'var(--text2)';
+    }
+
+    // Extra badges: divergence, momentum accel, HTF conflict
+    const badges = [];
+    if (r.divAligned)        badges.push(`<span title="RSI divergence confirms signal" style="font-size:8px;color:#00e5a0">Div✓</span>`);
+    if (r.divOpposed)        badges.push(`<span title="RSI divergence contradicts signal" style="font-size:8px;color:#ff3d5a">Div⚠</span>`);
+    if (r.accelAligned)      badges.push(`<span title="Momentum accelerating" style="font-size:8px;color:#ffb82e">Accel</span>`);
+    if (r.higherTFConflict)  badges.push(`<span title="Higher TF opposes signal" style="font-size:8px;color:#ff3d5a">HTF⚠</span>`);
 
     return `<tr style="${rowStyle}">
-      <td><span class="scr-sym" onclick="loadCoinFromScreener('${r.sym}')">${fmtSym(r.sym)}${isTop5 ? '⭐' : ''}</span></td>
+      <td>
+        <span class="scr-sym" onclick="loadCoinFromScreener('${r.sym}')">${fmtSym(r.sym)}${isTop5 ? '⭐' : ''}</span>
+        ${badges.length ? `<div style="display:flex;gap:3px;margin-top:2px">${badges.join('')}</div>` : ''}
+      </td>
       <td class="scr-price">${fmt(r.price)}</td>
       <td class="scr-chg ${chgCls}">${(r.chgPct >= 0 ? '+' : '') + r.chgPct.toFixed(2) + '%'}</td>
       <td><span class="signal-badge signal-${r.signal}">${r.signalLabel}</span></td>
       <td class="scr-rsi">${r.rsi !== null ? Math.round(r.rsi) : '—'}</td>
-      <td><div class="score-bar"><div class="score-track"><div class="score-fill" style="width:${r.score}%;background:${scoreCol}"></div></div><span style="font-size:9px;color:${scoreCol};font-family:var(--mono);font-weight:700;min-width:24px">${r.score}</span></div></td>
+      <td>
+        <div class="score-bar">
+          <div class="score-track">
+            <div class="score-fill" style="width:${r.score}%;background:${scoreCol}"></div>
+          </div>
+          <span style="font-size:9px;color:${scoreCol};font-family:var(--mono);font-weight:700;min-width:24px">${r.score}</span>
+        </div>
+      </td>
       <td><span style="font-family:var(--mono);font-size:9px;font-weight:700;color:${stackCol}">${stackTxt}</span></td>
-      <td><span style="font-family:var(--mono);font-size:9px;font-weight:700;color:${mtfCol}">${mtfStr}</span></td>
-      <td><span style="font-family:var(--mono);font-size:9px;font-weight:700;color:${volCol};background:${volBg};border-radius:6px;padding:1px 5px">${volStr}${volIcon}</span></td>
+      <td title="${mtfTitle}"><span style="font-family:var(--mono);font-size:9px;font-weight:700;color:${mtfCol}">${mtfStr}${r.higherTFConflict ? ' ⚠' : ''}</span></td>
+      <td><span style="font-family:var(--mono);font-size:9px;font-weight:700;color:${volCol};background:${volBg};border-radius:6px;padding:1px 5px">${volStr}${volMark}</span></td>
       <td><span style="font-family:var(--mono);font-size:9px;color:${distCol}">${distStr}</span></td>
       <td>
         <div style="position:relative;width:36px;height:6px;background:var(--bg3);border-radius:2px;display:inline-block">
           <div style="position:absolute;left:0;top:0;height:100%;width:${hlPos}%;background:${hlBarCol};border-radius:2px"></div>
         </div>
-        <span style="font-family:var(--mono);font-size:8px;color:${hlBarCol};margin-left:3px">${hlLabel}${hlMark}</span>
+        <span style="font-family:var(--mono);font-size:8px;color:${hlMarkCol};margin-left:3px">${hlLabel}${hlMark}</span>
       </td>
       <td><span style="font-family:var(--mono);font-size:9px;color:${ageCol}">${ageTxt}</span></td>
+      <td><span style="font-family:var(--mono);font-size:9px;color:${fibCol}">${fibTxt}</span></td>
       <td><button class="scr-trade-btn" onclick="loadCoinFromScreener('${r.sym}')">Trade →</button></td>
     </tr>`;
   }).join('');

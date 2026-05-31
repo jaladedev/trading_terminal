@@ -51,6 +51,43 @@ const FIB_LEVELS = [
 
 const TF_MINS = { '1m':1, '3m':3, '5m':5, '15m':15, '30m':30, '1h':60, '4h':240, '1d':1440 };
 
+// Higher timeframes carry more weight in MTF scoring
+const TF_WEIGHT = { '1m':1, '3m':1, '5m':1, '15m':2, '30m':2, '1h':3, '4h':5, '1d':8 };
+
+// ─── RSI divergence detector (lightweight, screener-local) ───────────────────
+function detectRSIDivBearish(candles, rsiVals) {
+  // Bearish: price makes higher high but RSI makes lower high
+  const n = Math.min(candles.length, rsiVals.length, 30);
+  if (n < 10) return false;
+  const prices = candles.slice(-n).map(c => c.h);
+  const rsis   = rsiVals.slice(-n);
+  const ph1i   = prices.lastIndexOf(Math.max(...prices.slice(0, Math.floor(n / 2))));
+  const ph2i   = Math.floor(n / 2) + prices.slice(Math.floor(n / 2)).indexOf(Math.max(...prices.slice(Math.floor(n / 2))));
+  if (ph2i <= ph1i) return false;
+  return prices[ph2i] > prices[ph1i] && rsis[ph2i] < rsis[ph1i];
+}
+
+function detectRSIDivBullish(candles, rsiVals) {
+  // Bullish: price makes lower low but RSI makes higher low
+  const n = Math.min(candles.length, rsiVals.length, 30);
+  if (n < 10) return false;
+  const prices = candles.slice(-n).map(c => c.l);
+  const rsis   = rsiVals.slice(-n);
+  const pl1i   = prices.indexOf(Math.min(...prices.slice(0, Math.floor(n / 2))));
+  const pl2i   = Math.floor(n / 2) + prices.slice(Math.floor(n / 2)).indexOf(Math.min(...prices.slice(Math.floor(n / 2))));
+  if (pl2i <= pl1i) return false;
+  return prices[pl2i] < prices[pl1i] && rsis[pl2i] > rsis[pl1i];
+}
+
+// ─── Momentum acceleration: is rate-of-change speeding up or slowing? ────────
+function calcMomentumAccel(candles, period = 5) {
+  if (candles.length < period * 2 + 1) return 0;
+  const roc = (a, b) => b > 0 ? (a - b) / b * 100 : 0;
+  const recent = roc(candles[candles.length - 1].c, candles[candles.length - 1 - period].c);
+  const prev   = roc(candles[candles.length - 1 - period].c, candles[candles.length - 1 - period * 2].c);
+  return recent - prev; // positive = accelerating, negative = decelerating
+}
+
 export function analyseSymbol(sym, candles, primaryTf, tfData, activeTFs, fetchedAt, source) {
   if (!candles || candles.length < 15) return null;
 
@@ -59,6 +96,7 @@ export function analyseSymbol(sym, candles, primaryTf, tfData, activeTFs, fetche
   let avgGain = null, avgLoss = null, prevC = null;
   let rsi = null;
   const rsiWindow = [];
+  const rsiSeries = []; // track full RSI series for divergence
   let prevE9 = null, prevE20 = null;
   let lastCrossIdx = -1;
 
@@ -87,12 +125,14 @@ export function analyseSymbol(sym, candles, primaryTf, tfData, activeTFs, fetche
           avgLoss = rsiWindow.reduce((a, b) => a + b.loss, 0) / 14;
           const rs = avgLoss === 0 ? Infinity : avgGain / avgLoss;
           rsi = avgLoss === 0 ? 100 : 100 - 100 / (1 + rs);
+          rsiSeries.push(rsi);
         }
       } else {
         avgGain = (avgGain * 13 + gain) / 14;
         avgLoss = (avgLoss * 13 + loss) / 14;
         const rs = avgLoss === 0 ? Infinity : avgGain / avgLoss;
         rsi = avgLoss === 0 ? 100 : 100 - 100 / (1 + rs);
+        rsiSeries.push(rsi);
       }
     }
     prevC = c.c;
@@ -118,27 +158,81 @@ export function analyseSymbol(sym, candles, primaryTf, tfData, activeTFs, fetche
 
   const stackLabel = bullStack ? '9>20>50 🟢' : bearStack ? '9<20<50 🔴' : '⚠ Tangled';
 
+  // ── Trend age (candles since last cross) ─────────────────────────────────
+  const trendAge = lastCrossIdx >= 0
+    ? (candles.length - 1 - lastCrossIdx)
+    : (bullStack || bearStack ? candles.length : 0);
+
+  // ── Momentum acceleration ─────────────────────────────────────────────────
+  const momentumAccel = calcMomentumAccel(candles);
+  const accelAligned  = (signal === 'bull' && momentumAccel > 0) ||
+                        (signal === 'bear' && momentumAccel < 0);
+  const accelOpposed  = (signal === 'bull' && momentumAccel < -0.5) ||
+                        (signal === 'bear' && momentumAccel >  0.5);
+
+  // ── RSI divergence ────────────────────────────────────────────────────────
+  const hasBullDiv = rsiSeries.length >= 10 && detectRSIDivBullish(candles, rsiSeries);
+  const hasBearDiv = rsiSeries.length >= 10 && detectRSIDivBearish(candles, rsiSeries);
+  // divergence aligned with signal = confirmation; opposed = warning
+  const divAligned  = (signal === 'bull' && hasBullDiv) || (signal === 'bear' && hasBearDiv);
+  const divOpposed  = (signal === 'bull' && hasBearDiv) || (signal === 'bear' && hasBullDiv);
+
+  // ── Volume direction check ────────────────────────────────────────────────
+  // Estimate buy/sell pressure from candle body direction on the spike candle
+  const lastCandle   = candles[candles.length - 1];
+  const volWindow    = candles.slice(-21, -1);
+  const avgVol       = volWindow.length ? volWindow.reduce((a, c) => a + c.v, 0) / volWindow.length : 0;
+  const curVol       = lastCandle.v;
+  const volRatio     = avgVol > 0 ? curVol / avgVol : 1;
+  const volSpike     = volRatio >= 2.0;
+  const volHot       = volRatio >= 1.5;
+  const hasFakeVol   = candles.some(c => c._fakeVol);
+  // Candle body direction on the volume spike candle
+  const volBullish   = lastCandle.c >= lastCandle.o; // green candle = buy pressure
+  const volAligned   = (signal === 'bull' && volBullish) || (signal === 'bear' && !volBullish);
+  const volOpposed   = (signal === 'bull' && !volBullish) || (signal === 'bear' && volBullish);
+
+  // ── Score ─────────────────────────────────────────────────────────────────
   let score = 0;
 
+  // EMA stack
   if (bullStack || bearStack) score += 30;
 
+  // RSI zone
   if (rsi !== null) {
-    if      (signal === 'bull' && rsi > 50 && rsi < 65)   score += 20;
-    else if (signal === 'bull' && rsi >= 40 && rsi < 50)   score += 12;
-    else if (signal === 'bear' && rsi < 50 && rsi > 35)    score += 20;
-    else if (signal === 'bear' && rsi >= 50 && rsi <= 60)  score += 12;
+    if      (signal === 'bull' && rsi > 50 && rsi < 65)  score += 20;
+    else if (signal === 'bull' && rsi >= 40 && rsi < 50)  score += 12;
+    else if (signal === 'bear' && rsi < 50 && rsi > 35)   score += 20;
+    else if (signal === 'bear' && rsi >= 50 && rsi <= 60) score += 12;
 
+    // Price above/below EMA20
     if (signal === 'bull' && price > e20) score += 15;
     if (signal === 'bear' && price < e20) score += 15;
 
+    // Extreme RSI + recent cross
     if (rsi < 30 && signal === 'bull' && recentCross) score += 15;
     if (rsi > 70 && signal === 'bear' && recentCross) score += 15;
   }
 
+  // Recent cross
   if (recentCross) score += 15;
+
+  // Trend age — fresh crosses score higher, very old trends score lower
+  if (trendAge <= 3)                      score += 12;
+  else if (trendAge <= 8)                 score += 6;
+  else if (trendAge > 40)                 score  = Math.max(0, score - 8);
+
+  // Momentum acceleration
+  if (accelAligned)  score += 8;
+  if (accelOpposed)  score  = Math.max(0, score - 6);
+
+  // RSI divergence
+  if (divAligned)    score += 12;
+  if (divOpposed)    score  = Math.max(0, score - 10);
 
   score = Math.min(100, score);
 
+  // ── Fib proximity ─────────────────────────────────────────────────────────
   const swingWindow = candles.slice(-50);
   const swingHi = Math.max(...swingWindow.map(c => c.h));
   const swingLo = Math.min(...swingWindow.map(c => c.l));
@@ -202,23 +296,22 @@ export function analyseSymbol(sym, candles, primaryTf, tfData, activeTFs, fetche
     score = Math.min(100, score + fibBonus);
   }
 
-  const hasFakeVol = candles.some(c => c._fakeVol);
-  const volWindow  = candles.slice(-21, -1);
-  const avgVol     = volWindow.length ? volWindow.reduce((a, c) => a + c.v, 0) / volWindow.length : 0;
-  const curVol     = candles[candles.length - 1].v;
-  const volRatio   = avgVol > 0 ? curVol / avgVol : 1;
-  const volSpike   = volRatio >= 2.0;
-  const volHot     = volRatio >= 1.5;
+  // Volume — direction-aware
+  if (volSpike) {
+    if (volAligned)       score = Math.min(100, score + 10);
+    else if (volOpposed)  score = Math.max(0,   score - 6);
+  } else if (volHot && volAligned) {
+    score = Math.min(100, score + 4);
+  }
 
-  if (volSpike && (bullStack || bearStack)) score = Math.min(100, score + 10);
-
+  // EMA20 distance
   const e20dist = e20 > 0 ? ((price - e20) / e20 * 100) : 0;
-
   if (Math.abs(e20dist) <= 1.0 && (bullStack || bearStack))
     score = Math.min(100, score + 8);
   else if (Math.abs(e20dist) > 5.0)
     score = Math.max(0, score - 10);
 
+  // H/L position vs signal direction
   const cPer24  = Math.round(1440 / (TF_MINS[primaryTf] || 15));
   const last24  = candles.slice(-Math.min(cPer24, candles.length));
   const hi24    = Math.max(...last24.map(c => c.h));
@@ -228,24 +321,57 @@ export function analyseSymbol(sym, candles, primaryTf, tfData, activeTFs, fetche
   const nearHigh = hlPos >= 80;
   const nearLow  = hlPos <= 20;
 
-  const trendAge = lastCrossIdx >= 0
-    ? (candles.length - 1 - lastCrossIdx)
-    : (bullStack || bearStack ? candles.length : 0);
+  // Reward confluence: bull pulling back to low, bear rallying to high
+  if (signal === 'bull' && nearLow)  score = Math.min(100, score + 10);
+  if (signal === 'bear' && nearHigh) score = Math.min(100, score + 10);
+  // Penalise chasing: bull extended to high, bear extended to low
+  if (signal === 'bull' && nearHigh) score = Math.max(0, score - 8);
+  if (signal === 'bear' && nearLow)  score = Math.max(0, score - 8);
 
   const atr = calcATR(candles, 14);
 
+  // ── MTF — weighted by timeframe significance ──────────────────────────────
   const available = activeTFs.filter(t => tfData[t] && tfData[t].signal !== 'none');
-  const bulls     = available.filter(t => tfData[t].signal === 'bull').length;
-  const bears     = available.filter(t => tfData[t].signal === 'bear').length;
-  const dominated = Math.max(bulls, bears);
-  const mtfDir    = bulls > bears ? 'bull' : bears > bulls ? 'bear' : 'mixed';
-  const mtfScore  = available.length ? Math.round(dominated / available.length * 100) : 0;
-  const mtfFull   = dominated === available.length && available.length > 1;
-  const mtfMost   = !mtfFull && dominated >= Math.ceil(available.length * 0.75);
-  const mtfBreakdown = activeTFs.map(t => ({
+
+  let weightedBull = 0, weightedBear = 0, totalWeight = 0;
+  let higherTFConflict = false;
+
+  // Define "higher" as anything with more minutes than the primary TF
+  const primaryMins = TF_MINS[primaryTf] || 15;
+
+  available.forEach(t => {
+    const w   = TF_WEIGHT[t] || 1;
+    const sig = tfData[t].signal;
+    if (sig === 'bull') weightedBull += w;
+    if (sig === 'bear') weightedBear += w;
+    totalWeight += w;
+
+    // Check if a higher TF contradicts the primary signal
+    if ((TF_MINS[t] || 0) > primaryMins) {
+      if ((signal === 'bull' && sig === 'bear') ||
+          (signal === 'bear' && sig === 'bull')) {
+        higherTFConflict = true;
+      }
+    }
+  });
+
+  const dominated     = Math.max(weightedBull, weightedBear);
+  const mtfDir        = weightedBull > weightedBear ? 'bull' : weightedBear > weightedBull ? 'bear' : 'mixed';
+  const mtfScore      = totalWeight > 0 ? Math.round(dominated / totalWeight * 100) : 0;
+  const bulls         = available.filter(t => tfData[t].signal === 'bull').length;
+  const bears         = available.filter(t => tfData[t].signal === 'bear').length;
+  const mtfFull       = dominated === totalWeight && available.length > 1;
+  const mtfMost       = !mtfFull && mtfScore >= 75;
+  const mtfBreakdown  = activeTFs.map(t => ({
     tf:     t,
     signal: tfData[t] ? tfData[t].signal : 'none',
+    weight: TF_WEIGHT[t] || 1,
   }));
+
+  // Penalise higher-TF conflict in score
+  if (higherTFConflict) score = Math.max(0, score - 12);
+
+  score = Math.min(100, Math.max(0, score));
 
   return {
     sym, price, chgPct,
@@ -253,9 +379,12 @@ export function analyseSymbol(sym, candles, primaryTf, tfData, activeTFs, fetche
     e9, e20, e50, rsi, score,
     bullStack, bearStack,
     recentCross, fibProximity, hasFakeVol,
-    volRatio, volSpike, volHot, avgVol, curVol,
+    volRatio, volSpike, volHot, volAligned, volOpposed, avgVol, curVol,
     e20dist, hlPos, nearHigh, nearLow, hi24, lo24,
     trendAge, atr,
+    momentumAccel, accelAligned, accelOpposed,
+    hasBullDiv, hasBearDiv, divAligned, divOpposed,
+    higherTFConflict,
     mtfDir, mtfScore, mtfFull, mtfMost, mtfBreakdown,
     bullCount: bulls, bearCount: bears,
     availTFs: available.length, totalTFs: activeTFs.length,
@@ -332,8 +461,13 @@ export function applyScreenerFilters(results, filter) {
       case 'mtf_full':  return r.mtfFull;
       case 'mtf_most':  return r.mtfFull || r.mtfMost;
       case 'vol_spike': return r.volSpike;
+      case 'vol_align': return r.volSpike && r.volAligned;
       case 'near_ema':  return Math.abs(r.e20dist || 0) <= 1.5;
       case 'fresh':     return r.trendAge <= 5;
+      case 'div_bull':  return r.hasBullDiv;
+      case 'div_bear':  return r.hasBearDiv;
+      case 'accel':     return r.accelAligned;
+      case 'no_htf_conflict': return !r.higherTFConflict;
       default:          return true;
     }
   });
@@ -360,6 +494,7 @@ export function sortScreenerResults(results, key, asc) {
                        bv = b.fibProximity ? b.fibProximity.distPct  : 999; break;
       case 'fibstr':   av = a.fibProximity ? a.fibProximity.strength : 0;
                        bv = b.fibProximity ? b.fibProximity.strength : 0; break;
+      case 'accel':    av = a.momentumAccel ?? 0;  bv = b.momentumAccel ?? 0;  break;
       case 'fetchage': av = a.fetchedAt ?? 0; bv = b.fetchedAt ?? 0; break;
       default:         av = a[key] ?? -Infinity; bv = b[key] ?? -Infinity;
     }
