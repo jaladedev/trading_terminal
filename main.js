@@ -173,19 +173,19 @@ export function init() {
   initBacktester();
   initSearch();
 
-  const searchInp = document.getElementById('sym-search');
+  // const searchInp = document.getElementById('sym-search');
 
-  if (searchInp) {
-    searchInp.addEventListener('keydown', e => {
-      if (e.key !== 'Enter') return;
-      const sym = sanitizeSym(searchInp.value);
-      if (!sym) { showToast('Invalid symbol'); return; }
-      searchInp.value = '';
-      searchInp.blur();
-      initSym(sym, state.tf);
-      document.querySelector('.chart-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    });
-  }
+  // if (searchInp) {
+  //   searchInp.addEventListener('keydown', e => {
+  //     if (e.key !== 'Enter') return;
+  //     const sym = sanitizeSym(searchInp.value);
+  //     if (!sym) { showToast('Invalid symbol'); return; }
+  //     searchInp.value = '';
+  //     searchInp.blur();
+  //     initSym(sym, state.tf);
+  //     document.querySelector('.chart-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  //   });
+  // }
   requestAnimationFrame(() => initScreenerFilter());
   dom.resolveLazy();
 }
