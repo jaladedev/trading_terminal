@@ -105,6 +105,13 @@ const LAZY_IDS = [
   'bt-progress-wrap', 'bt-progress-bar', 'bt-progress-lbl',
   'bt-strat-desc',
   'gs-input', 'scr-text-filter',
+  'liquidity-sweeps',
+  'equal-levels',
+  'session-context',
+  'session-open-alert',
+  'squeeze-indicator',
+  'squeeze-state',
+  'displacement-info',
 ];
 
 let _initialised = false;

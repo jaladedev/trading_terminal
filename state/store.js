@@ -101,6 +101,14 @@ export const state = {
 
   watchlist: [],
 
+  liquiditySweeps:  [],
+  equalLevels:      [],
+  displacements:    [],
+  squeezeState:     null,
+  sessionCtx:       null,
+
+  currentSymHTFConflict: false,
+
   alerts:   [],
   alertDir: 'above',
 
@@ -154,4 +162,9 @@ export function resetCandleState() {
   state.swingPoints = []; state.structureEvents = [];
   state.hoverIdx = -1;
   state.sessionLevels = null;
+  state.liquiditySweeps  = [];
+  state.equalLevels      = [];
+  state.displacements    = [];
+  state.squeezeState     = null;
+  state.sessionCtx       = null;
 }

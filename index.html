@@ -85,9 +85,22 @@
         <div id="regime-display" class="regime-badge regime-choppy" style="margin-bottom:8px">—</div>
         <div id="regime-advice" class="regime-advice"></div>
         <div class="stat-grid" style="margin-top:8px">
-          <div class="stat-item"><div class="stat-lbl">ADX</div><div class="stat-val" id="regime-adx">—</div></div>
-          <div class="stat-item"><div class="stat-lbl">Eff. Ratio</div><div class="stat-val" id="regime-er">—</div></div>
+          <div class="stat-item"><div class="stat-lbl">ADX</div><div class="stat-val" id="regime-adx"  data-tip="regime.adx">—</div></div>
+          <div class="stat-item"><div class="stat-lbl">Eff. Ratio</div><div class="stat-val" id="regime-er" data-tip="regime.er">—</div></div>
         </div>
+        <!-- Session context — inside card-body so it collapses with the card -->
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px">
+          <span class="stat-lbl">Session</span>
+          <span id="session-context" style="font-family:var(--mono);font-size:9px;font-weight:700">—</span>
+        </div>
+        <div id="session-open-alert" style="font-family:var(--mono);font-size:9px;
+          margin-top:5px;padding:4px 8px;background:var(--bg3);border-radius:4px;
+          display:none;text-align:center;font-weight:700"></div>
+        <!-- Squeeze indicator — inside card-body -->
+        <div class="stat-lbl" style="margin-top:10px">Volatility</div>
+        <div id="squeeze-indicator" style="font-family:var(--mono);font-size:9px;
+          padding:4px 8px;background:var(--bg3);border-radius:4px;
+          border:1px solid var(--border);display:none;margin-top:4px"></div>
       </div>
     </div>
 
@@ -99,10 +112,16 @@
       <div class="card-body">
         <div class="struct-label">Recent Events</div>
         <div id="structure-events" class="structure-events-list"></div>
+        <!-- Liquidity sweeps — inside card-body -->
+        <div class="struct-label" style="margin-top:8px">Liquidity Sweeps</div>
+        <div id="liquidity-sweeps" style="display:flex;flex-wrap:wrap;gap:4px;min-height:18px"></div>
+        <!-- Equal levels — inside card-body -->
+        <div class="struct-label" style="margin-top:8px">Equal Highs / Lows</div>
+        <div id="equal-levels" style="display:flex;flex-wrap:wrap;gap:4px;min-height:18px"></div>
         <div class="struct-label" style="margin-top:8px">VWAP</div>
         <div class="stat-grid" style="grid-template-columns:1fr 1fr">
-          <div class="stat-item"><div class="stat-lbl">VWAP</div><div class="stat-val mono" id="leg-vwap">—</div></div>
-          <div class="stat-item"><div class="stat-lbl">AVWAP</div><div class="stat-val mono" id="avwap-val">—</div></div>
+          <div class="stat-item"><div class="stat-lbl">VWAP</div><div class="stat-val mono" id="leg-vwap" data-tip="vwap">—</div></div>
+          <div class="stat-item"><div class="stat-lbl">AVWAP</div><div class="stat-val mono" id="avwap-val" data-tip="avwap">—</div></div>
         </div>
         <div style="display:flex;gap:6px;margin-top:8px">
           <button class="btn" style="flex:1;font-size:9px" onclick="anchorToSessionOpen()">⚓ Session Open</button>
@@ -118,18 +137,18 @@
       </div>
       <div class="card-body">
         <div class="ema-grid">
-          <div class="ema-item"><span class="ema-label" style="color:#ff6b35">EMA 9</span><span class="ema-val mono" id="leg-e9">—</span></div>
-          <div class="ema-item"><span class="ema-label" style="color:#4da6ff">EMA 20</span><span class="ema-val mono" id="leg-e20">—</span></div>
-          <div class="ema-item"><span class="ema-label" style="color:#a78bff">EMA 50</span><span class="ema-val mono" id="leg-e50">—</span></div>
-          <div class="ema-item"><span class="ema-label" style="color:rgba(240,224,64,0.9)">VWAP</span><span class="ema-val mono" id="leg-vwap2">—</span></div>
+          <div class="ema-item"><span class="ema-label" style="color:#ff6b35">EMA 9</span><span class="ema-val mono" id="leg-e9" data-tip="ema.9">—</span></div>
+          <div class="ema-item"><span class="ema-label" style="color:#4da6ff">EMA 20</span><span class="ema-val mono" id="leg-e20" data-tip="ema.20">—</span></div>
+          <div class="ema-item"><span class="ema-label" style="color:#a78bff">EMA 50</span><span class="ema-val mono" id="leg-e50" data-tip="ema.50">—</span></div>
+          <div class="ema-item"><span class="ema-label" style="color:rgba(240,224,64,0.9)">VWAP</span><span class="ema-val mono" id="leg-vwap2" data-tip="vwap">—</span></div>
         </div>
-        <div class="ema-item" style="margin-top:6px"><span class="ema-label" style="color:#888">CVD</span><span class="ema-val mono" id="leg-cvd">—</span></div>
+        <div class="ema-item" style="margin-top:6px"><span class="ema-label" style="color:#888">CVD</span><span class="ema-val mono" id="leg-cvd" data-tip="cvd">—</span></div>
         <div class="delta-section" style="margin-top:10px">
           <div class="struct-label">Order Flow Delta</div>
           <div class="delta-row">
-            <span class="delta-buy-label">Buy <span id="delta-buy">—</span></span>
-            <span class="delta-sell-label">Sell <span id="delta-sell">—</span></span>
-            <span class="delta-net-label" id="delta-net">—</span>
+            <span class="delta-buy-label">Buy <span id="delta-buy" data-tip="delta.buy">—</span></span>
+            <span class="delta-sell-label">Sell <span id="delta-sell" data-tip="delta.sell">—</span></span>
+            <span class="delta-net-label" id="delta-net" data-tip="delta.net">—</span>
           </div>
           <div class="progress-track" style="margin-top:4px">
             <div id="delta-ratio-bar" class="progress-bar" style="width:50%"></div>
@@ -138,9 +157,9 @@
         <div class="vp-section" style="margin-top:10px">
           <div class="struct-label">Volume Profile</div>
           <div class="stat-grid" style="grid-template-columns:repeat(3,1fr)">
-            <div class="stat-item"><div class="stat-lbl">POC</div><div class="stat-val mono" style="font-size:12px" id="vp-poc-val">—</div></div>
-            <div class="stat-item"><div class="stat-lbl">VAH</div><div class="stat-val mono" style="font-size:12px" id="vp-vah-val">—</div></div>
-            <div class="stat-item"><div class="stat-lbl">VAL</div><div class="stat-val mono" style="font-size:12px" id="vp-val-val">—</div></div>
+            <div class="stat-item"><div class="stat-lbl">POC</div><div class="stat-val mono" style="font-size:12px" id="vp-poc-val" data-tip="vp.poc">—</div></div>
+            <div class="stat-item"><div class="stat-lbl">VAH</div><div class="stat-val mono" style="font-size:12px" id="vp-vah-val" data-tip="vp.vah">—</div></div>
+            <div class="stat-item"><div class="stat-lbl">VAL</div><div class="stat-val mono" style="font-size:12px" id="vp-val-val" data-tip="vp.val">—</div></div>
           </div>
         </div>
         <div style="display:flex;gap:5px;margin-top:10px;flex-wrap:wrap" role="group" aria-label="Chart overlays">
@@ -208,6 +227,13 @@
         </div>
         <p id="sug-reason" class="sug-reason"></p>
         <div id="entry-quality-factors" class="entry-quality-factors"></div>
+        <!-- Squeeze state — inside card-body, after quality factors -->
+        <div id="squeeze-state" style="font-family:var(--mono);font-size:9px;
+          margin-bottom:6px;display:none;padding:3px 8px;background:var(--bg3);
+          border-radius:4px;border:1px solid var(--border)"></div>
+        <!-- Displacement info — inside card-body -->
+        <div id="displacement-info" style="margin-bottom:8px;display:none;
+          display:flex;flex-wrap:wrap;gap:4px"></div>
 
         <div class="sug-levels">
           <div class="sug-level sug-entry">
@@ -245,7 +271,6 @@
           </div>
         </div>
 
-        <!-- BT context — populated by updateSuggestionUI when sym/tf match last BT run -->
         <div id="bt-context" class="stat-grid"
              style="grid-template-columns:repeat(5,1fr);margin-top:10px;display:none;background:rgba(77,166,255,0.06);border-radius:6px;padding:6px;border:1px solid rgba(77,166,255,0.15)"
              aria-label="Backtest context metrics">
@@ -292,7 +317,7 @@
             <div class="zone-desc">Enter immediately at market · EMA9 area</div>
             <div class="zone-price mono" id="zone-agg">—</div>
           </div>
-          <div class="zone-item zone-balanced">
+          <div class="zone-item zone-balanced" >
             <div class="zone-label">Balanced</div>
             <div class="zone-desc">Wait for EMA9/20 midpoint retest</div>
             <div class="zone-price mono" id="zone-bal">—</div>
@@ -420,7 +445,7 @@
         </div>
         <div class="pnl-table-wrap">
           <table class="pnl-table" aria-label="Session trade log">
-            <thead><tr><th><!-- # --><abbr title="Trade number">#</abbr></th><th>Time</th><th>Sym</th><th>Dir</th><th>Result</th><th>P&amp;L</th></tr></thead>
+            <thead><tr><th><abbr title="Trade number">#</abbr></th><th>Time</th><th>Sym</th><th>Dir</th><th>Result</th><th>P&amp;L</th></tr></thead>
             <tbody id="pnl-tbody">
               <tr><td colspan="6" class="pnl-empty">No trades logged</td></tr>
             </tbody>
@@ -439,7 +464,6 @@
 <!-- ── Bottom Row ── -->
 <div class="bottom-row">
 
-  <!-- Trade Journal -->
   <div id="card-journal" class="card card--collapsible collapsed">
     <div class="card-header" onclick="toggleCard('card-journal')">
       <span class="card-title">📓 Trade Journal</span>
@@ -561,8 +585,6 @@
       </div>
     </div>
     <div class="card-body">
-
-      <!-- Coin list mode + custom coin -->
       <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-bottom:8px">
         <span class="stat-lbl" id="list-mode-label">List:</span>
         <div role="group" aria-labelledby="list-mode-label" style="display:contents">
@@ -579,8 +601,6 @@
           <button class="btn btn--icon" style="font-size:9px" onclick="scrResetCoins()"    title="Reset list" aria-label="Reset coin list">↺</button>
         </div>
       </div>
-
-      <!-- Fetch top-N -->
       <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-bottom:8px">
         <span class="stat-lbl" id="fetch-top-label">Fetch top:</span>
         <div role="group" aria-labelledby="fetch-top-label" style="display:contents">
@@ -590,8 +610,6 @@
           <button class="btn btn--icon" style="font-size:9px" onclick="scrFetchTopCoins(null,this)">ALL</button>
         </div>
       </div>
-
-      <!-- Tier legend (curated mode only) -->
       <div id="scr-tier-legend" style="display:none;flex-wrap:wrap;gap:4px;margin-bottom:8px" aria-hidden="true">
         <span class="stat-lbl" style="width:100%;margin-bottom:2px">Sectors:</span>
         <span class="signal-badge" style="font-size:8px">T1 Top</span>
@@ -605,8 +623,6 @@
         <span class="signal-badge" style="font-size:8px">Scalp</span>
         <span class="signal-badge" style="font-size:8px">Watch</span>
       </div>
-
-      <!-- TF selector -->
       <div style="display:flex;align-items:center;gap:4px;margin-bottom:8px" role="group" aria-label="Screener timeframes">
         <span class="stat-lbl" style="margin-right:4px">TFs:</span>
         <button class="pill-btn active" onclick="setScrTF('5m',this)">5m</button>
@@ -614,16 +630,12 @@
         <button class="pill-btn active" onclick="setScrTF('1h',this)">1h</button>
         <button class="pill-btn active" onclick="setScrTF('4h',this)">4h</button>
       </div>
-
-      <!-- Text search filter -->
       <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
         <label for="scr-text-filter" class="sr-only">Filter by symbol</label>
         <input id="scr-text-filter" class="input-field" placeholder="Filter by symbol…"
                style="flex:1;font-size:10px" oninput="renderScreenerTable()" />
         <button class="btn btn--icon" style="font-size:9px" onclick="clearScreenerFilter()" aria-label="Clear symbol filter">✕</button>
       </div>
-
-      <!-- Signal filters -->
       <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px" role="group" aria-label="Signal filters">
         <button class="pill-btn scr-filter-btn active" onclick="scrSetFilter('all',this)">All</button>
         <button class="pill-btn scr-filter-btn" onclick="scrSetFilter('bull',this)">Bull</button>
@@ -648,33 +660,29 @@
         <button class="pill-btn scr-filter-btn" onclick="scrSetFilter('accel',this)">Accel</button>
         <button class="pill-btn scr-filter-btn" onclick="scrSetFilter('no_htf_conflict',this)">No HTF⚠</button>
       </div>
-
-      <!-- Progress -->
       <div id="scr-progress" class="scr-progress" style="display:none" role="status" aria-live="polite">
         <div class="progress-track" style="margin-bottom:4px">
           <div id="scr-progress-bar" class="progress-bar" style="width:0%"></div>
         </div>
         <span id="scr-progress-lbl" class="stat-lbl">0/0</span>
       </div>
-
-      <!-- Results table — 14 cols -->
       <div class="scr-table-wrap" role="region" aria-label="Screener results" tabindex="0">
         <table id="scr-table" class="scr-table" aria-label="Screener results table">
           <thead>
             <tr>
-              <th onclick="scrSort('sym')"   scope="col" title="Symbol · primary scan TF shown below">Symbol / TF</th>
-              <th onclick="scrSort('price')" scope="col">Price</th>
-              <th onclick="scrSort('chg')"   scope="col">Chg%</th>
+              <th onclick="scrSort('sym')"    scope="col" title="Symbol · primary scan TF shown below">Symbol / TF</th>
+              <th onclick="scrSort('price')"  scope="col">Price</th>
+              <th onclick="scrSort('chg')"    scope="col">Chg%</th>
               <th onclick="scrSort('signal')" scope="col">Signal</th>
-              <th onclick="scrSort('rsi')"   scope="col">RSI</th>
-              <th onclick="scrSort('score')" scope="col">Score ↓</th>
-              <th onclick="scrSort('stack')" scope="col">Stack</th>
-              <th onclick="scrSort('mtf')"   scope="col" title="Weighted by TF — higher TFs count more">MTF</th>
-              <th onclick="scrSort('vol')"   scope="col" title="Vol ratio · ✓ aligned with signal · ⚠ opposed">Vol</th>
-              <th onclick="scrSort('dist')"  scope="col">Dist</th>
-              <th onclick="scrSort('hlpos')" scope="col" title="H/L position · ✓ good entry side · ⚠ extended">H/L</th>
-              <th onclick="scrSort('age')"   scope="col" title="Candles since last EMA9/20 cross">Age</th>
-              <th onclick="scrSort('fib')"   scope="col" title="Nearest Fib level">Fib</th>
+              <th onclick="scrSort('rsi')"    scope="col">RSI</th>
+              <th onclick="scrSort('score')"  scope="col">Score ↓</th>
+              <th onclick="scrSort('stack')"  scope="col">Stack</th>
+              <th onclick="scrSort('mtf')"    scope="col" title="Weighted by TF — higher TFs count more">MTF</th>
+              <th onclick="scrSort('vol')"    scope="col" title="Vol ratio · ✓ aligned with signal · ⚠ opposed">Vol</th>
+              <th onclick="scrSort('dist')"   scope="col">Dist</th>
+              <th onclick="scrSort('hlpos')"  scope="col" title="H/L position · ✓ good entry side · ⚠ extended">H/L</th>
+              <th onclick="scrSort('age')"    scope="col" title="Candles since last EMA9/20 cross">Age</th>
+              <th onclick="scrSort('fib')"    scope="col" title="Nearest Fib level">Fib</th>
               <th scope="col"><span class="sr-only">Actions</span></th>
             </tr>
           </thead>
@@ -695,28 +703,20 @@
         <button class="btn btn--primary btn--icon" id="mtf-scan-btn" onclick="event.stopPropagation();runMTFScan()">▶ Scan</button>
         <span class="card-chevron" aria-hidden="true">▾</span>
       </div>
-      </div>
     </div>
     <div class="card-body">
-
-      <!-- Coin input -->
       <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
         <label for="mtf-coin-inp" class="sr-only">Add coin to MTF scan</label>
         <input id="mtf-coin-inp" class="input-field" placeholder="Add coin e.g. BTC"
                style="width:110px;font-size:10px"
                onkeydown="if(event.key==='Enter')mtfAddCoin()" />
         <button class="btn btn--icon" style="font-size:9px" onclick="mtfAddCoin()" aria-label="Add coin">+</button>
-        <button class="btn btn--icon btn--primary" style="font-size:9px" onclick="mtfScanCurrent()"
-        title="Add current chart symbol and scan">⊕ Current</button>
-        <button class="btn btn--icon" style="font-size:9px" onclick="mtfLoadFromScreener()"
-                title="Load top scored coins from last screener scan">⬇ From Screener</button>
-        <button class="btn btn--icon" style="font-size:9px" onclick="mtfLoadWatchlist()"
-                title="Load watchlist coins">⬇ Watchlist</button>
+        <button class="btn btn--icon btn--primary" style="font-size:9px" onclick="mtfScanCurrent()" title="Add current chart symbol and scan">⊕ Current</button>
+        <button class="btn btn--icon" style="font-size:9px" onclick="mtfLoadFromScreener()" title="Load top scored coins from last screener scan">⬇ From Screener</button>
+        <button class="btn btn--icon" style="font-size:9px" onclick="mtfLoadWatchlist()" title="Load watchlist coins">⬇ Watchlist</button>
         <button class="btn btn--icon" style="font-size:9px" onclick="mtfClearCoins()">✕ Clear</button>
         <span id="mtf-coin-count" class="stat-lbl">0 coins</span>
       </div>
-
-      <!-- TF toggles -->
       <div style="display:flex;align-items:center;gap:4px;margin-bottom:8px;flex-wrap:wrap"
            role="group" aria-label="MTF timeframes">
         <span class="stat-lbl" style="margin-right:4px">TFs:</span>
@@ -727,8 +727,6 @@
         <button class="pill-btn active" id="mtf-tf-1h"  onclick="toggleMTFTf('1h',this)">1h</button>
         <button class="pill-btn active" id="mtf-tf-4h"  onclick="toggleMTFTf('4h',this)">4h</button>
       </div>
-
-      <!-- Filters -->
       <div style="display:flex;gap:4px;margin-bottom:8px;flex-wrap:wrap" role="group" aria-label="MTF filters">
         <button class="pill-btn scr-filter-btn active" onclick="mtfSetFilter('all',this)">All</button>
         <button class="pill-btn scr-filter-btn" onclick="mtfSetFilter('full_bull',this)">Full Bull</button>
@@ -736,27 +734,20 @@
         <button class="pill-btn scr-filter-btn" onclick="mtfSetFilter('conflict',this)">Conflict</button>
         <button class="pill-btn scr-filter-btn" onclick="mtfSetFilter('clean',this)">No Conflict</button>
       </div>
-
-      <!-- Progress -->
       <div id="mtf-progress" style="display:none;margin-bottom:6px" role="status" aria-live="polite">
         <div class="progress-track" style="margin-bottom:4px">
           <div id="mtf-progress-bar" class="progress-bar" style="width:0%"></div>
         </div>
         <span id="mtf-progress-lbl" class="stat-lbl">0/0</span>
       </div>
-
-      <!-- Table — headers populated dynamically by renderMTFTable -->
       <div class="scr-table-wrap" role="region" aria-label="MTF confluence results" tabindex="0">
         <table id="mtf-table" class="scr-table" aria-label="MTF confluence table">
-          <thead>
-            <tr id="mtf-thead-row"></tr>
-          </thead>
+          <thead><tr id="mtf-thead-row"></tr></thead>
           <tbody id="mtf-tbody">
             <tr><td colspan="8" class="scr-empty">Add coins and scan, or load from screener</td></tr>
           </tbody>
         </table>
       </div>
-
     </div>
   </div>
 
@@ -772,7 +763,6 @@
         <button id="replay-play-btn" class="btn" onclick="replayToggle()" disabled>▶ Play</button>
         <button class="btn btn--icon" onclick="replayStep()" aria-label="Step one bar">⏭</button>
         <button class="btn btn--danger btn--icon" onclick="replayReset()" aria-label="Reset replay">↺</button>
-        <!-- FIX: replay speed label now uses for/id association. -->
         <label for="replay-speed" class="fut-lbl">Speed:</label>
         <input id="replay-speed" type="range" min="1" max="10" value="2"
                style="width:80px;vertical-align:middle"
@@ -782,7 +772,6 @@
     </div>
   </div>
 
-  <!-- Backtester (populated at runtime by backtesterHTML()) -->
   <div id="bt-placeholder"></div>
 
 </div>

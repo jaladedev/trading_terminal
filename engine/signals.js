@@ -1,19 +1,58 @@
 /**
  * engine/signals.js
  * Entry quality scoring, suggestion computation, and confluence engine.
+ *
+ * Improvements:
+ *  - volatility-adjusted scoring (atrPct gating)
+ *  - higherTFConflict penalty wired in
+ *  - compression/squeeze breakout detection
+ *  - displacement candle bonus
+ *  - session weighting (London/NY open premium)
+ *  - liquidity sweep context
  */
 
 import { getFibLevels, nearestFib, calcATR } from '../indicators/engine.js';
 import { TF_MS } from '../utils/helpers.js';
 
+// ── Volatility thresholds ─────────────────────────────────────────────────────
+const ATR_PCT_SQUEEZE    = 0.3;   // below this = squeeze / compression
+const ATR_PCT_NORMAL_LO  = 0.3;
+const ATR_PCT_NORMAL_HI  = 3.0;
+const ATR_PCT_EXTENDED   = 3.0;   // above this = overextended, reduce score
+
 export function scoreEntryQuality({
   dir, rsi, e9, e20, e50, price, vwap, avwap,
-  cvd, crossovers, tf, candles, regime
+  cvd, crossovers, tf, candles, regime,
+  // New parameters — all optional for backward compatibility
+  higherTFConflict = false,
+  atrPct           = null,
+  displacements    = [],
+  liquiditySweeps  = [],
+  sessionCtx       = null,
 }) {
   let score = 0;
   const factors = [];
 
-  // EMA Stack alignment (max 30)
+  // ── Volatility gate ───────────────────────────────────────────────────────
+  // In a squeeze (very low ATR), signals are low-reliability — cap potential
+  let volMultiplier = 1.0;
+  if (atrPct !== null) {
+    if (atrPct < ATR_PCT_SQUEEZE) {
+      volMultiplier = 0.75;
+      factors.push('Squeeze — low volatility, reduced conviction');
+    } else if (atrPct > ATR_PCT_EXTENDED) {
+      volMultiplier = 0.85;
+      factors.push('High volatility — overextended range');
+    }
+  }
+
+  // ── Higher TF Conflict — hard penalty applied first ──────────────────────
+  if (higherTFConflict) {
+    score -= 18;
+    factors.push('Higher TF opposes signal ⚠');
+  }
+
+  // ── EMA Stack alignment (max 30) ─────────────────────────────────────────
   if (dir === 'long') {
     if (e9 > e20 && e20 > e50) { score += 30; factors.push('Full bullish stack'); }
     else if (e9 > e50)          { score += 15; factors.push('Price above EMA50'); }
@@ -22,7 +61,7 @@ export function scoreEntryQuality({
     else if (e9 < e50)          { score += 15; factors.push('Price below EMA50'); }
   }
 
-  //  RSI conditions (max 20)
+  // ── RSI conditions (max 20) ───────────────────────────────────────────────
   if (dir === 'long') {
     if (rsi > 50 && rsi < 65)       { score += 20; factors.push('RSI momentum zone'); }
     else if (rsi >= 40 && rsi <= 50){ score += 12; factors.push('RSI midzone'); }
@@ -35,11 +74,11 @@ export function scoreEntryQuality({
     else if (rsi <= 35)              { score -= 10; factors.push('RSI oversold'); }
   }
 
-  // Price vs EMAs (max 15)
+  // ── Price vs EMAs (max 15) ────────────────────────────────────────────────
   if (dir === 'long'  && price > e20) { score += 15; factors.push('Price > EMA20'); }
   if (dir === 'short' && price < e20) { score += 15; factors.push('Price < EMA20'); }
 
-  // VWAP alignment (max 15)
+  // ── VWAP alignment (max 15) ───────────────────────────────────────────────
   if (vwap) {
     if (dir === 'long'  && price > vwap) { score += 15; factors.push('Price above VWAP'); }
     if (dir === 'short' && price < vwap) { score += 15; factors.push('Price below VWAP'); }
@@ -47,7 +86,7 @@ export function scoreEntryQuality({
     if (dir === 'short' && price > vwap) { score -=  8; factors.push('Above VWAP — weak short'); }
   }
 
-  //  Anchored VWAP alignment (max 15)
+  // ── Anchored VWAP alignment (max 15) ─────────────────────────────────────
   if (avwap != null) {
     const distPct = Math.abs(price - avwap) / avwap * 100;
 
@@ -55,10 +94,7 @@ export function scoreEntryQuality({
       if (price > avwap) {
         score += 10;
         factors.push('Price above session AVWAP');
-        if (distPct < 0.3) {
-          score += 5;
-          factors.push('At AVWAP — institutional mean reversion zone');
-        }
+        if (distPct < 0.3) { score += 5; factors.push('At AVWAP — institutional mean reversion zone'); }
       } else {
         score -= 5;
         factors.push('Below AVWAP — anchored resistance');
@@ -67,10 +103,7 @@ export function scoreEntryQuality({
       if (price < avwap) {
         score += 10;
         factors.push('Price below session AVWAP');
-        if (distPct < 0.3) {
-          score += 5;
-          factors.push('At AVWAP — institutional rejection zone');
-        }
+        if (distPct < 0.3) { score += 5; factors.push('At AVWAP — institutional rejection zone'); }
       } else {
         score -= 5;
         factors.push('Above AVWAP — anchored support');
@@ -78,7 +111,7 @@ export function scoreEntryQuality({
     }
   }
 
-  // CVD alignment (max 15)
+  // ── CVD alignment (max 15) ────────────────────────────────────────────────
   if (cvd !== undefined && cvd !== null) {
     if (dir === 'long'  && cvd > 0) { score += 15; factors.push('CVD net buying'); }
     if (dir === 'short' && cvd < 0) { score += 15; factors.push('CVD net selling'); }
@@ -86,7 +119,7 @@ export function scoreEntryQuality({
     if (dir === 'short' && cvd > 0) { score -=  5; factors.push('CVD bullish divergence'); }
   }
 
-  // Recent crossover bonus (max 20)
+  // ── Recent crossover bonus (max 20) ──────────────────────────────────────
   if (crossovers && crossovers.length > 0) {
     const recent = crossovers[crossovers.length - 1];
     const age    = (Date.now() - recent.time) / 60_000;
@@ -95,7 +128,7 @@ export function scoreEntryQuality({
     if (recent.type === 'bear' && dir === 'short' && age < cutoff) { score += 20; factors.push('Fresh bear cross'); }
   }
 
-  // Fibonacci proximity (max 20)
+  // ── Fibonacci proximity (max 20) ─────────────────────────────────────────
   if (candles && candles.length >= 5) {
     const fibLevels = getFibLevels(candles.slice(-50));
     const nf        = nearestFib(price, fibLevels);
@@ -115,7 +148,7 @@ export function scoreEntryQuality({
     }
   }
 
-  // 9. Regime bonus/penalty (max 15, min -15)
+  // ── Regime bonus/penalty (max 15, min -15) ────────────────────────────────
   if (regime) {
     if (regime.type === 'trending') {
       if ((regime.dir === 'bull' && dir === 'long') || (regime.dir === 'bear' && dir === 'short')) {
@@ -128,6 +161,74 @@ export function scoreEntryQuality({
     } else if (regime.type === 'ranging') {
       score += 0; factors.push('Ranging regime');
     }
+  }
+
+  // ── Displacement candle bonus (max 15) ────────────────────────────────────
+  // Recent displacement in signal direction = institutional momentum confirmation
+  if (displacements && displacements.length > 0) {
+    const recentDisp = displacements
+      .filter(d => d.recencyBars !== undefined ? d.recencyBars <= 5 : true)
+      .slice(0, 3);
+
+    const alignedDisp = recentDisp.find(d => d.dir === dir);
+    if (alignedDisp) {
+      const bonus = Math.min(15, Math.round(alignedDisp.magnitude * 5));
+      score += bonus;
+      factors.push(`Displacement candle ${alignedDisp.magnitude.toFixed(1)}×ATR${alignedDisp.volConfirmed ? ' + vol' : ''}`);
+    }
+
+    const opposingDisp = recentDisp.find(d => d.dir !== dir);
+    if (opposingDisp && !alignedDisp) {
+      score -= 8;
+      factors.push('Recent displacement against signal');
+    }
+  }
+
+  // ── Liquidity sweep context (max 12) ─────────────────────────────────────
+  // A sweep of lows followed by a bull signal = classic stop hunt + reversal
+  if (liquiditySweeps && liquiditySweeps.length > 0) {
+    const recentSweeps = liquiditySweeps.filter(s => s.recencyBars <= 8);
+    const sweepOfLows  = recentSweeps.find(s => s.swingType === 'low');
+    const sweepOfHighs = recentSweeps.find(s => s.swingType === 'high');
+
+    if (dir === 'long'  && sweepOfLows) {
+      score += 12;
+      factors.push('Liquidity sweep of lows — stop hunt reversal setup');
+    }
+    if (dir === 'short' && sweepOfHighs) {
+      score += 12;
+      factors.push('Liquidity sweep of highs — stop hunt reversal setup');
+    }
+  }
+
+  // ── Session weighting (max 10) ────────────────────────────────────────────
+  if (sessionCtx) {
+    if (sessionCtx.isOverlap) {
+      score += 10;
+      factors.push('NY/London overlap — highest liquidity window');
+    } else if (sessionCtx.isHighProb) {
+      score += 6;
+      factors.push(`${sessionCtx.sessionLabel} — active session`);
+    }
+
+    // Session open bonus — first 30 mins of London/NY open are high-probability
+    if (sessionCtx.openAlert) {
+      const { session, minsAway } = sessionCtx.openAlert;
+      if (minsAway <= 15) {
+        score += 8;
+        factors.push(`${session} open in ${minsAway}m — prime window`);
+      } else if (minsAway <= 30) {
+        score += 4;
+        factors.push(`${session} open nearby`);
+      }
+    }
+  }
+
+  // ── Apply volatility multiplier to raw score additions ───────────────────
+  // (We do this at the end on the positive portion only — don't amplify penalties)
+  if (volMultiplier < 1.0) {
+    const penalty = Math.round((1 - volMultiplier) * Math.max(0, score) * 0.25);
+    score -= penalty;
   }
 
   score = Math.max(0, Math.min(100, score));
@@ -222,6 +323,84 @@ export function computeSuggestion({ e9, e20, e50, livePrice, rsi, rrRatio, tf, c
   }
 
   return { dir, entry, stop, target, reason };
+}
+
+// ── Compression / Squeeze Breakout Detection ──────────────────────────────────
+
+/**
+ * Detects volatility compression (squeeze) and potential breakout direction.
+ * Uses ATR ratio and price range relative to recent history.
+ *
+ * Returns:
+ *  { inSqueeze, breakoutDir, strength, atrRatio, label }
+ *  or null if insufficient data.
+ */
+export function detectSqueezeBreakout(candles, options = {}) {
+  const {
+    atrPeriod    = 14,
+    lookback     = 20,
+    squeezeRatio = 0.5,   // current ATR < squeezeRatio * max ATR over lookback
+    breakoutRatio= 1.5,   // current candle body > breakoutRatio * ATR
+  } = options;
+
+  if (!candles || candles.length < lookback + atrPeriod) return null;
+
+  // Compute ATR values over the lookback window
+  const atrs = [];
+  for (let i = Math.max(1, candles.length - lookback - atrPeriod); i < candles.length; i++) {
+    const c = candles[i], p = candles[i - 1];
+    if (p) atrs.push(Math.max(c.h - c.l, Math.abs(c.h - p.c), Math.abs(c.l - p.c)));
+  }
+  if (atrs.length < atrPeriod) return null;
+
+  // Current ATR (last period bars)
+  const recentAtrs = atrs.slice(-atrPeriod);
+  const currentAtr = recentAtrs.reduce((a, b) => a + b, 0) / recentAtrs.length;
+
+  // Historical max ATR over lookback
+  const maxAtr = Math.max(...atrs);
+  const minAtr = Math.min(...atrs);
+
+  // ATR ratio (compression indicator)
+  const atrRatio = maxAtr > 0 ? currentAtr / maxAtr : 1;
+
+  const inSqueeze = atrRatio < squeezeRatio;
+
+  if (!inSqueeze) return { inSqueeze: false, atrRatio, label: null };
+
+  // Check last candle for breakout signal
+  const last  = candles[candles.length - 1];
+  const prev  = candles[candles.length - 2];
+  const body  = Math.abs(last.c - last.o);
+  const range = last.h - last.l;
+
+  const isBullBreakout = last.c > last.o && body > currentAtr * breakoutRatio && last.c > prev.h;
+  const isBearBreakout = last.c < last.o && body > currentAtr * breakoutRatio && last.c < prev.l;
+
+  let breakoutDir = null;
+  let label = `⟨⟩ Squeeze (ATR at ${Math.round(atrRatio * 100)}% of range)`;
+
+  if (isBullBreakout) {
+    breakoutDir = 'bull';
+    label = `⟨↑⟩ Squeeze Breakout LONG — ATR expanding`;
+  } else if (isBearBreakout) {
+    breakoutDir = 'bear';
+    label = `⟨↓⟩ Squeeze Breakout SHORT — ATR expanding`;
+  }
+
+  // Strength: how compressed the squeeze is
+  const strength = Math.round((1 - atrRatio) * 100);
+
+  return {
+    inSqueeze:   true,
+    breakoutDir,
+    strength,
+    atrRatio,
+    currentAtr,
+    maxAtr,
+    minAtr,
+    label,
+  };
 }
 
 export function computeEntryZones({ e9, e20, livePrice, suggestion, atr }) {

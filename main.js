@@ -3,8 +3,13 @@ import { loadSettings, saveSettings, loadWatchlist, saveWatchlist, loadCollapsed
 import { fmt, fmtSym, fmtK, TF_MS } from './utils/helpers.js';
 import { updEMA, emaK, calcWilderRSI, updVWAP, computeLiveVwap, computeLiveBands, updCVD, calcATR, detectRSIDivergence, getFibLevels } from './indicators/engine.js';
 import { detectRegime, calcTrendAge, calcMomentumAcceleration } from './indicators/regime.js';
-import { detectSwingPoints, detectStructureBreaks, getSessionLevels } from './indicators/structure.js';
-import { computeSuggestion, scoreEntryQuality, computeEntryZones, computePartialTPs, calcAtrPositionSize } from './engine/signals.js';
+import { detectSwingPoints, detectStructureBreaks, getSessionLevels,
+  detectLiquiditySweeps, detectEqualLevels,
+  detectDisplacementCandles, getSessionContext
+} from './indicators/structure.js';
+import {  computeSuggestion, scoreEntryQuality, computeEntryZones,
+  computePartialTPs, calcAtrPositionSize, detectSqueezeBreakout
+} from './engine/signals.js';
 import { calcFuturesMetrics, calcRiskBasedSize, calcATRStop, calcATRTrailStop, calcDailyGoal, suggestLeverage } from './engine/risk.js';
 import { initRenderer, scheduleRender, cancelPendingRender, RenderPriority } from './engine/renderer.js';
 import { KlineWebSocket, TradeStream, fetchKlines, fetchKlinesFallback, batchFetchScreener } from './services/exchange.js';
@@ -14,6 +19,7 @@ import { initJournal, openJournalEntry, saveJournalEntry, renderJournalList, ren
 import { LWCChart } from './charts/lwc.js';
 import { backtesterHTML, btRun, btCompare, btExport, initBacktester } from './components/backtester.js';
 import * as dom from './ui/dom.js';
+import { initTooltips, setTip } from './ui/tooltip.js';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -120,6 +126,7 @@ function escHtml(s) {
 
 export function init() {
   dom.init();
+  initTooltips();
 
   const saved    = loadSettings();
   state.sym      = saved?.sym      || 'BTCUSDT';
@@ -389,31 +396,40 @@ function _getLatestAvwap() {
 }
 
 function computeAndRender() {
-  const all = [...state.candles, state.currentCandle].filter(Boolean);
-  const atr = calcATR(all, 14);
-
+  const all    = [...state.candles, state.currentCandle].filter(Boolean);
+  const atr    = calcATR(all, 14);
+  const atrPct = state.livePrice > 0 ? (atr / state.livePrice) * 100 : 0;
+ 
   state.regime = detectRegime(all, state.e20s, state.livePrice);
-
+ 
   if (all.length >= 10) {
     state.swingPoints     = detectSwingPoints(all.slice(-60), 3, 3);
     state.structureEvents = detectStructureBreaks(all.slice(-60), state.swingPoints);
+    state.liquiditySweeps = detectLiquiditySweeps(all.slice(-60), state.swingPoints);
+    state.equalLevels     = detectEqualLevels(state.swingPoints);
+    state.displacements   = detectDisplacementCandles(all, { lookback: 20 });
+    state.squeezeState    = detectSqueezeBreakout(all);
   }
-
+ 
+  state.sessionCtx    = getSessionContext(all);
   state.sessionLevels = getSessionLevels(all);
-
+ 
   dom.batch(() => {
-    _computeSignalsAndUI(all, atr);
+    _computeSignalsAndUI(all, atr, atrPct);
     updateRegimeUI(state.regime);
     updateStructureUI(state.swingPoints, state.structureEvents);
+    updateSessionUI(state.sessionCtx);
+    updateSqueezeUI(state.squeezeState);
   });
-
+ 
   drawAll();
 }
 
 function computePartial() {
-  const all = [...state.candles, state.currentCandle].filter(Boolean);
-  const atr = calcATR(all, 14);
-  dom.batch(() => _computeSignalsAndUI(all, atr));
+  const all    = [...state.candles, state.currentCandle].filter(Boolean);
+  const atr    = calcATR(all, 14);
+  const atrPct = state.livePrice > 0 ? (atr / state.livePrice) * 100 : 0;
+  dom.batch(() => _computeSignalsAndUI(all, atr, atrPct));
   drawAll();
 }
 
@@ -422,7 +438,7 @@ function renderLive() {
   drawLive();
 }
 
-function _computeSignalsAndUI(all, atr) {
+function _computeSignalsAndUI(all, atr, atrPct = 0) {
   const latestRSI   = state.rsiVals[state.rsiVals.length - 1];
   const latestVwap  = state.vwapVals[state.vwapVals.length - 1];
   const latestAvwap = _getLatestAvwap();
@@ -449,6 +465,13 @@ function _computeSignalsAndUI(all, atr) {
     avwap: latestAvwap,
     cvd: cvdLast,
     crossovers: state.crossovers, tf: state.tf, candles: all, regime: state.regime,
+    // New: pass through all extra context
+    atrPct,
+    displacements:   state.displacements   || [],
+    liquiditySweeps: state.liquiditySweeps || [],
+    sessionCtx:      state.sessionCtx      || null,
+    // higherTFConflict is set to false here; wire from screener if available
+    higherTFConflict: state.currentSymHTFConflict || false,
   });
 
   const zones = computeEntryZones({ e9: state.e9, e20: state.e20, livePrice: state.livePrice, suggestion: sug, atr });
@@ -583,6 +606,9 @@ function updateVPLabels(vp) {
   dom.setText(dom.el['vp-poc-val'], fmt(vp.poc));
   dom.setText(dom.el['vp-vah-val'], fmt(vp.vah));
   dom.setText(dom.el['vp-val-val'], fmt(vp.val));
+  setTip(dom.el['vp-poc-val'], 'vp.poc');
+  setTip(dom.el['vp-vah-val'], 'vp.vah');
+  setTip(dom.el['vp-val-val'], 'vp.val');
 }
 
 function updateEntryZonesUI(zones) {
@@ -590,11 +616,16 @@ function updateEntryZonesUI(zones) {
   dom.setText(dom.el['zone-agg'], fmt(zones.aggressive));
   dom.setText(dom.el['zone-bal'], fmt(zones.balanced));
   dom.setText(dom.el['zone-con'], fmt(zones.conservative));
+  setTip(dom.el['zone-agg'], 'zone.aggressive');
+  setTip(dom.el['zone-bal'], 'zone.balanced');
+  setTip(dom.el['zone-con'], 'zone.conservative');
 }
 
 function updateRegimeUI(regime) {
   const el = dom.el['regime-display'];
   if (!el || !regime) return;
+  const tipKey = `regime.${regime.type}.${regime.dir ?? ''}`.replace(/\.$/, '');
+  setTip(el, tipKey);
   const typeMap = {
     trending: regime.dir === 'bull' ? 'regime-trending-bull' : 'regime-trending-bear',
     ranging:  'regime-ranging',
@@ -606,6 +637,8 @@ function updateRegimeUI(regime) {
   dom.setText(dom.el['regime-advice'], regime.advice || '');
   dom.setText(dom.el['regime-adx'],    regime.adx?.toFixed(1) ?? '—');
   dom.setText(dom.el['regime-er'],     regime.er?.toFixed(2)  ?? '—');
+  setTip(dom.el['regime-adx'], 'regime.adx');
+  setTip(dom.el['regime-er'],  'regime.er');
 }
 
 function updateStructureUI(swings, events) {
@@ -614,15 +647,103 @@ function updateStructureUI(swings, events) {
   const recent = (events || []).slice(-5).reverse();
   const html = recent.length
     ? recent.map(ev => {
+        const tipKey = `struct.${ev.type.toLowerCase()}.${ev.dir}`;
         const cls = `struct-${ev.type.toLowerCase()}-${ev.dir}`;
-        return `<span class="signal-badge ${cls}" style="font-size:8px;padding:1px 7px">${ev.type} ${ev.dir === 'bull' ? '↑' : '↓'}</span>`;
+        return `<span class="signal-badge ${cls}" data-tip="${tipKey}" style="font-size:8px;padding:1px 7px">${ev.type} ${ev.dir === 'bull' ? '↑' : '↓'}</span>`;
       }).join('')
     : '<span style="color:var(--text3);font-size:9px;font-family:var(--mono)">No recent structure breaks</span>';
   if (el.innerHTML !== html) el.innerHTML = html;
+ 
+  // Liquidity sweeps display
+  const sweepEl = dom.lazy('liquidity-sweeps');
+  if (sweepEl) {
+    const sweeps = (state.liquiditySweeps || []).slice(0, 4);
+    if (sweeps.length) {
+      sweepEl.style.display = '';
+      sweepEl.innerHTML = sweeps.map(s => {
+        const tipKey = s.swingType === 'low' ? 'sweep.low' : 'sweep.high';
+        const col   = s.swingType === 'low' ? 'var(--green)' : 'var(--red)';
+        const arrow = s.swingType === 'low' ? '↓' : '↑';
+        const fire  = s.sweepPct >= 0.5 ? ' 🔥' : '';
+        const age   = s.recencyBars != null ? ` ${s.recencyBars}b` : '';
+        return `<span class="signal-badge" data-tip="${tipKey}" style="font-size:8px;padding:1px 7px;color:${col};border-color:${col}40">
+          ${arrow}Sweep${fire}${age}
+        </span>`;
+      }).join('');
+    } else {
+      sweepEl.innerHTML = '<span style="color:var(--text3);font-size:9px;font-family:var(--mono)">None detected</span>';
+    }
+  }
+ 
+  // Equal levels display
+  const eqEl = dom.lazy('equal-levels');
+  if (eqEl) {
+    const equals = (state.equalLevels || []).filter(l => l.count >= 2).slice(0, 4);
+    if (equals.length) {
+      eqEl.style.display = '';
+      eqEl.innerHTML = equals.map(l => {
+        const tipKey = l.type === 'high' ? 'equal.highs' : 'equal.lows';
+        const col = l.type === 'high' ? 'rgba(255,61,90,0.9)' : 'rgba(0,229,160,0.9)';
+        return `<span data-tip="${tipKey}" style="font-family:var(--mono);font-size:8px;color:${col};
+          background:var(--bg3);border-radius:4px;padding:2px 6px;margin:1px">
+          ${l.label} <span style="color:var(--text3)">${fmt(l.price)}</span>
+        </span>`;
+      }).join('');
+    } else {
+      eqEl.innerHTML = '<span style="color:var(--text3);font-size:9px;font-family:var(--mono)">None detected</span>';
+    }
+  }
+}
+
+function updateSessionUI(ctx) {
+  const el = dom.lazy('session-context');
+  if (!el || !ctx) return;
+  dom.setText(el, ctx.sessionLabel);
+  dom.setStyle(el, 'color', ctx.sessionColor);
+  const labelLower = (ctx.sessionLabel || '').toLowerCase();
+  const tipKey = labelLower.includes('london') && labelLower.includes('ny') ? 'session.overlap'
+               : labelLower.includes('london') ? 'session.london'
+               : labelLower.includes('new york') || labelLower.includes('ny') ? 'session.ny'
+               : labelLower.includes('asia') ? 'session.asia'
+               : 'session.dead';
+  setTip(el, tipKey);
+ 
+  const alertEl = dom.lazy('session-open-alert');
+  if (alertEl) {
+    if (ctx.openAlert && ctx.openAlert.minsAway <= 30) {
+      alertEl.style.display = '';
+      alertEl.textContent   = `⏰ ${ctx.openAlert.session} open in ${ctx.openAlert.minsAway}m`;
+      alertEl.style.color   = ctx.openAlert.color;
+    } else {
+      alertEl.style.display = 'none';
+    }
+  }
+}
+ 
+function updateSqueezeUI(sq) {
+  const el = dom.lazy('squeeze-indicator');
+  if (!el) return;
+  if (sq?.inSqueeze) {
+    el.style.display = '';
+    dom.setText(el, sq.label);
+    dom.setStyle(el, 'color',
+      sq.breakoutDir === 'bull' ? 'var(--green)' :
+      sq.breakoutDir === 'bear' ? 'var(--red)'   : 'var(--amber)');
+      setTip(el, sq.breakoutDir === 'bull' ? 'squeeze.bull'
+          : sq.breakoutDir === 'bear' ? 'squeeze.bear'
+          :                             'squeeze.active');
+  } else {
+    el.style.display = 'none';
+  }
 }
 
 function updateSuggestionUI(sug, quality, tps, trailStop, atrSize, btResult) {
   if (!sug) return;
+  const scoreKey = quality?.score >= 75 ? 'quality.prime'
+                : quality?.score >= 50 ? 'quality.good'
+                : quality?.score >= 25 ? 'quality.weak'
+                :                        'quality.skip';
+  setTip(dom.el['entry-quality-label'], scoreKey);
 
   dom.setText(dom.el['sug-entry'],  fmt(sug.entry));
   dom.setText(dom.el['sug-stop'],   fmt(sug.stop));
@@ -651,11 +772,51 @@ function updateSuggestionUI(sug, quality, tps, trailStop, atrSize, btResult) {
 
   dom.setText(dom.el['atr-trail-val'], trailStop ? fmt(trailStop) : '—');
 
+  // Squeeze / breakout indicator
+  const sqEl = dom.lazy('squeeze-state');
+  if (sqEl) {
+    const sq = state.squeezeState;
+    if (sq?.inSqueeze) {
+      sqEl.style.display = '';
+      sqEl.textContent   = sq.label;
+      sqEl.style.color   = sq.breakoutDir === 'bull' ? 'var(--green)'
+                         : sq.breakoutDir === 'bear' ? 'var(--red)'
+                         : 'var(--amber)';
+    } else {
+      sqEl.style.display = 'none';
+    }
+  }
+ 
+  // Displacement candles info
+  const dispEl = dom.lazy('displacement-info');
+  if (dispEl) {
+    const recent = (state.displacements || []).filter(d => {
+      const barsAgo = (state.candles.length - 1) - d.idx;
+      return barsAgo <= 5;
+    }).slice(0, 2);
+ 
+    if (recent.length) {
+      dispEl.style.display = '';
+      dispEl.innerHTML = recent.map(d => {
+        const tipKey = `displacement.${d.strength || 'moderate'}`; // needs d.strength from detectDisplacementCandles
+        return `<span data-tip="${tipKey}" style="color:${d.dir === 'bull' ? 'var(--green)' : 'var(--red)'};
+          font-family:var(--mono);font-size:9px;background:var(--bg3);
+          border-radius:4px;padding:1px 6px;margin-right:4px">
+          ${d.label}
+        </span>`
+    }).join('');
+    } else {
+      dispEl.style.display = 'none';
+    }
+  }
+
   if (atrSize) {
     dom.setText(dom.el['atr-size-tokens'], atrSize.tokens.toFixed(4));
     dom.setText(dom.el['atr-size-value'],  '$' + atrSize.positionValue.toFixed(2));
     dom.setText(dom.el['atr-size-risk'],   '$' + atrSize.riskUSD.toFixed(2));
     dom.setText(dom.el['atr-stop-dist'],   atrSize.stopDistPct.toFixed(2) + '%');
+    setTip(dom.el['atr-trail-val'],   'atr.trail');
+    setTip(dom.el['atr-size-tokens'], 'atr.size');
   }
 
   const btEl = dom.el['bt-context'];
@@ -724,6 +885,12 @@ function updateLegendLabels(vwap, cvd) {
   dom.setText(dom.el['leg-e9'],   state.e9  ? fmt(state.e9)  : '—');
   dom.setText(dom.el['leg-e20'],  state.e20 ? fmt(state.e20) : '—');
   dom.setText(dom.el['leg-e50'],  state.e50 ? fmt(state.e50) : '—');
+  setTip(dom.el['leg-e9'],   'ema.9');
+  setTip(dom.el['leg-e20'],  'ema.20');
+  setTip(dom.el['leg-e50'],  'ema.50');
+  setTip(dom.el['leg-vwap'], 'vwap');
+  setTip(dom.el['leg-vwap2'],'vwap');
+  setTip(dom.el['leg-cvd'],  'cvd');
 
   const vwapStr = vwap ? fmt(vwap) : '—';
   dom.setText(dom.el['leg-vwap'],  vwapStr);
@@ -741,6 +908,9 @@ function updateDeltaTicker() {
 
   dom.setText(dom.el['delta-buy'],  fmtK(state.tradeBuyVol));
   dom.setText(dom.el['delta-sell'], fmtK(state.tradeSellVol));
+  setTip(dom.el['delta-buy'],  'delta.buy');
+  setTip(dom.el['delta-sell'], 'delta.sell');
+  setTip(dom.el['delta-net'],  'delta.net');
 
   const netEl = dom.el['delta-net'];
   if (netEl) {
@@ -1091,6 +1261,9 @@ async function runScreener() {
 
     if (r) scrResults.push(r);
   });
+
+  const currentResult = scrResults.find(r => r.sym === state.sym);
+  state.currentSymHTFConflict = currentResult?.higherTFConflict ?? false;
 
   renderScreenerTable();
   scrRunning = false;
