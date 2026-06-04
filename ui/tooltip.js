@@ -487,14 +487,16 @@ function _hide() {
  */
 export function initTooltips() {
   document.addEventListener('mouseenter', e => {
-    const anchor = e.target.closest('[data-tip]');
+    const target = e.target instanceof Element ? e.target : e.target?.parentElement;
+    const anchor = target?.closest('[data-tip]');
     if (!anchor) return;
     clearTimeout(_showTimer);
     _showTimer = setTimeout(() => _show(anchor), SHOW_DELAY_MS);
   }, true);
 
   document.addEventListener('mouseleave', e => {
-    const anchor = e.target.closest('[data-tip]');
+    const target = e.target instanceof Element ? e.target : e.target?.parentElement;
+    const anchor = target?.closest('[data-tip]');
     if (!anchor) return;
     clearTimeout(_showTimer);
     _hide();

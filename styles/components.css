@@ -404,6 +404,12 @@ input[type=range]::-webkit-slider-thumb {
 .score-fill  { height: 100%; border-radius: 2px; }
 
 @media (max-width: 560px) {
+  .card--collapsible.collapsed .card-body {
+    display: none;
+  }
+  .card--collapsible:not(.collapsed) .card-body {
+    display: block;
+  }
   body {
     font-size: 12px;
   }
@@ -415,19 +421,22 @@ input[type=range]::-webkit-slider-thumb {
     align-items: flex-start;
   }
   .btn {
-    padding-left: 10px;
-    padding-right: 10px;
+    padding: 4px 10px;
+    font-size: 9px;
   }
   .btn--icon {
     padding-left: 7px;
     padding-right: 7px;
   }
   .pill-btn {
-    padding-left: 8px;
-    padding-right: 8px;
+    padding: 3px 8px;
+    font-size: 9px;
   }
   .stat-item {
     padding: 8px 9px;
+  }
+  .card-title {
+    font-size: 10px;
   }
   .stat-val {
     font-size: 14px;
@@ -438,5 +447,13 @@ input[type=range]::-webkit-slider-thumb {
   }
   .jrn-row-actions {
     width: 100%;
+  }
+  .alert-del,
+  .wl-chip-del {
+    min-width: 32px;
+    min-height: 32px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 }

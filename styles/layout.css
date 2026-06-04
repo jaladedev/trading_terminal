@@ -252,7 +252,6 @@
 .ema-val   { font-family: var(--mono); font-size: 10px; }
 
 /* ── Delta Ticker ────────────────────────────────────────────────────────── */
-.delta-section { }
 .delta-row { display: flex; justify-content: space-between; align-items: center; font-family: var(--mono); font-size: 10px; margin-bottom: 3px; }
 .delta-buy-label  { color: var(--green); }
 .delta-sell-label { color: var(--red); }
@@ -395,10 +394,19 @@
 .scr-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; min-width: 0; }
 .scr-tfs { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
 .scr-progress { margin-bottom: 8px; }
-.scr-table-wrap { overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
+.scr-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+}
 .scr-table {
-  width: 100%; min-width: 760px; border-collapse: collapse;
-  font-family: var(--mono); font-size: 10px;
+  width: 100%;
+  min-width: 0;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 10px;
 }
 .scr-table th {
   padding: 6px 8px; border-bottom: 1px solid var(--border);
@@ -475,13 +483,42 @@
   .topbar {
     padding: 8px 10px;
     gap: 8px;
+    align-items: stretch;
+  }
+  .topbar-left,
+  .topbar-right {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .topbar-left {
+    align-items: center;
+  }
+  .topbar-right {
+    align-items: center;
+  }
+  .topbar-center {
+    order: 3;
+    flex-basis: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    overflow: visible;
+  }
+  .topbar-center .pill-group {
+    flex-wrap: wrap;
+    width: 100%;
+    justify-content: flex-start;
+    white-space: normal;
   }
   .app-layout {
     grid-template-columns: 1fr;
     padding: 10px;
     gap: 10px;
   }
-  .col-left { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; }
+  .col-center { order: -1; }
+  .col-left { order: 1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; align-items: start; }
+  .col-right { order: 2; }
   .col-left > .card { margin-bottom: 0; }
   .col-right { grid-template-columns: 1fr; }
   .journal-layout { grid-template-columns: 1fr; }
@@ -489,22 +526,49 @@
   .bottom-row { padding: 0 10px 10px; }
   .chart-header-right { justify-content: flex-start; }
   .pnl-log-btns { flex-wrap: wrap; }
+   #card-ema {
+    grid-column: 1 / -1;
+  }
 }
 
 @media (max-width: 560px) {
+  .topbar {
+    padding: 8px 8px 10px;
+    gap: 6px;
+  }
+  .topbar-left,
+  .topbar-right,
+  .topbar-center {
+    min-width: 0;
+  }
   .topbar-left,
   .topbar-right {
     width: 100%;
     justify-content: space-between;
+    align-items: center;
   }
   .topbar-center {
     display: flex;
+    flex-direction: column;
+    width: 100%;
+    gap: 6px;
+    overflow: visible;
+  }
+  .topbar-center .pill-group {
+    flex: 1 1 auto;
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
   }
   .price-display {
     gap: 6px;
+    align-items: flex-end;
   }
   .live-price {
-    font-size: 16px;
+    font-size: 15px;
+  }
+  .live-change {
+    font-size: 10px;
   }
   .conn-status {
     max-width: 100%;
@@ -539,9 +603,28 @@
   .replay-controls > * {
     max-width: 100%;
   }
+  .scr-table-wrap {
+    width: 100%;
+  }
+  .scr-table {
+    min-width: 0;
+  }
   .kbd-legend {
     display: none;
   }
+  .jrn-form-panel {
+    max-width: 100%;
+    min-width: 0;
+  }
+}
+@media (max-width: 480px) {
+  .topbar-center {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap; 
+    padding-bottom: 4px;
+  }
+  .pill-btn { padding: 4px 8px; } 
 }
 
 @media (max-width: 380px) {
@@ -553,5 +636,9 @@
   .stat-grid,
   .jrn-stats-grid {
     grid-template-columns: 1fr;
+  }
+   .lev-header {
+    flex-wrap: wrap;
+    gap: 4px;
   }
 }
